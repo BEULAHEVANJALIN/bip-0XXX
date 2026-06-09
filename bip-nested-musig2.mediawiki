@@ -95,3 +95,82 @@ tree.
 This BIP specifies the additional nonce aggregation, signing, and partial
 signature aggregation rules required to make such recursive composition
 well-defined and compatible with BIP340 verification.
+
+==Algorithms==
+
+The following notation and all primitive algorithms (''IndividualPubkey'',
+''KeySort'', ''KeyAgg'', ''KeyAggCoeff'', ''ApplyTweak'', ''GetXonlyPubkey'',
+''GetPlainPubkey'', ''NonceGen'', ''NonceAgg'') are as defined in
+[[bip-0327.mediawiki|BIP327]]. This BIP does not restate them; implementers must
+implement BIP327 first.
+
+===Notation===
+
+All notation from BIP327 §Algorithms' §Notation applies here. Additional
+notation introduced by this BIP:
+
+; Tree structure
+
+* ''&Lambda;'' denotes the depth of the signing tree, a positive integer. Depth ''0'' is the root; depth ''&Lambda;−1'' is the leaf level.
+* ''d'' denotes a tree depth index, ranging from ''0'' (root) to ''&Lambda;−1'' (leaf).
+* ''n<sub>d</sub>'' denotes the number of participants (keys or sub-groups) at depth ''d''.
+* ''pk<sub>i,d</sub>'' denotes participant ''i'' 's plain public key at depth ''d''. At depth &Lambda;−1 this is an individual signer's plain public key. At depths 0..&Lambda;−2 it is the plain aggregate key of a sub-tree, i.e. ''cbytes(KeyAgg(L<sub>d</sub>).Q)'' for the appropriate child list.
+* ''L<sub>d</sub>'' denotes the ordered list of plain public keys that are input to ''KeyAgg'' at depth ''d''. The list ''L<sub>0</sub>'' produces the root aggregate key ''X&#771;''.
+
+; Nonces
+
+* ''r<sub>1,j</sub>'' for ''j = 1..ν'' denotes signer 1's secret nonce scalars, sampled uniformly at random. These appear in the signing equation and must never be reused. 
+* ''out<sup>d</sup>'' denotes the 66-byte aggregate nonce at depth ''d'', produced by running ''NonceAgg'' then ''NonceAggExt'' at that level. ''out<sup>0</sup>'' is the root aggregate nonce. ''out<sup>d</sup>'' for ''d ≥ 1'' is the aggregate nonce of the sub-tree at depth ''d'', as passed up to the parent.
+* ''(R<sub>1,0</sub>, ..., R<sub>ν,0</sub>) := out<sup>0</sup>'' denotes the ν nonce points extracted from the root aggregate nonce.
+
+; Per-level key-aggregation coefficients
+
+* ''a<sub>1,d</sub>'' denotes signer 1's key-aggregation coefficient at depth ''d'', computed as ''KeyAggCoef(L<sub>d</sub>, pk<sub>1,d</sub>)''. One coefficient exists per level the signer traverses from leaf to root.
+
+; Per-level nonce binding factors
+
+* ''b<sub>d+1</sub>'' for ''d = &Lambda;−2, ..., 0'' denotes the nonce binding factor derived at depth ''d'' during ''Sign<nowiki>'</nowiki>'', computed as ''H<sub>non</sub>(pk<sub>1,d</sub>, out<sup>d+1</sup>)''. It binds the sub-tree's aggregate nonce to signer 1's aggregate key at that level. Uses the <code>NestedMuSig/aggnoncecoef</code> tag. No message is included.
+* ''b<sub>0</sub>'' denotes the root-level nonce binding factor, computed as ''H<sub>non&#773;</sub>(X&#771;, (R<sub>1,0</sub>, ..., R<sub>ν,0</sub>), m)''. It binds the root aggregate nonce to the root aggregate key and the message. Uses the <code>NestedMuSig/noncecoef</code> tag. The message is included.
+
+; Accumulated products (computed in ''Sign<nowiki>'</nowiki>'')
+
+* ''b&#780;'' (b-check) denotes the accumulated product of all per-level nonce binding factors: ''b&#780; := &#8719;<sub>ℓ=0</sub><sup>&Lambda;−1</sup> b<sub>ℓ</sub> mod p''.
+* ''&#269;'' (c-check) denotes the accumulated challenge coefficient: ''&#269; := c · &#8719;<sub>ℓ=0</sub><sup>&Lambda;−1</sup> a<sub>1,ℓ</sub> mod p'', where ''c := H<sub>sig</sub>(X&#771;, R, m)''.
+
+; Effective root nonce
+
+* ''R'' denotes the effective root nonce point, computed from the root aggregate nonce as ''R := &#8719;<sub>j=1</sub><sup>ν</sup> R<sub>j,0</sub><sup>b<sub>0</sub><sup>j−1</sup></sup>''. For ν = 2 this is ''R<sub>1,0</sub> · R<sub>2,0</sub><sup>b<sub>0</sub></sup>''.
+
+; Final signing equation (from ''Sign<nowiki>'</nowiki>'')
+
+The partial signature produced by signer 1 is:
+: ''s<sub>1</sub> := č · sk<sub>1</sub> + Σ<sub>j=1</sub><sup>ν</sup> r<sub>1,j</sub> · b&#780;<sup>j−1</sup> mod p''
+
+For ν = 2 this reduces to ''s<sub>1</sub> = č · sk<sub>1</sub> + r<sub>1,1</sub> + r<sub>1,2</sub> · b&#780; mod p''.
+
+===Tagged Hashes===
+
+This BIP introduces the following tagged hash functions. All tagged hashes use the BIP340 tagged-hash construction:
+
+: ''SHA256(SHA256(tag) || SHA256(tag) || x)''
+
+where ''tag'' is a UTF-8 encoded string. The tag strings used by this BIP are distinct from the tag strings used by BIP327 to provide domain separation between MuSig2 and NestedMuSig2 sessions.
+
+{| class="wikitable"
+|-
+! Tag string !! Used in
+|-
+| <code>NestedMuSig/aux</code> || ''NonceGen'', ''DeterministicSign''
+|-
+| <code>NestedMuSig/nonce</code> || ''NonceGen''
+|-
+| <code>NestedMuSig/aggnoncecoef</code> || ''NonceAggExt''
+|-
+| <code>NestedMuSig/noncecoef</code> || ''GetSessionValues''
+|-
+| <code>NestedMuSig/deterministic/nonce</code> || ''DeterministicSign''
+|}
+
+The tags <code>NestedMuSig/aggnoncecoef</code> and <code>NestedMuSig/noncecoef</code> correspond to distinct random-oracle roles in the security proof (''H<sub>non</sub>'' and ''H<sub>non&#773;</sub>'' respectively in [[https://eprint.iacr.org/2026/223|Kohen (2026)]] and must use separate tags. Using a single shared tag for both would violate the domain-separation requirement of the security reduction.
+
+The Schnorr challenge MUST use the existing <code>BIP0340/challenge</code> tag and MUST NOT use a NestedMuSig-specific tag. This ensures the final signature is an ordinary BIP340 signature that passes standard BIP340 verification without modification.
