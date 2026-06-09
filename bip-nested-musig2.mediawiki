@@ -9,3 +9,25 @@
   Requires: 327, 340
   Post-History: TBD
 </pre>
+
+__TOC__
+
+==Introduction==
+
+===Abstract===
+
+This document proposes a standard for the NestedMuSig2 multi-signature scheme
+introduced in [[https://eprint.iacr.org/2026/223|Kohen (2026)]]. NestedMuSig2 is
+a recursive variant of [[bip-0327.mediawiki|BIP327]] (MuSig2) in which the
+public key of any participant in a signing group may itself be a MuSig2
+aggregate key, allowing a tree of nested cosigner groups to collaboratively
+produce a single [[bip-0340.mediawiki|BIP340]]-compatible Schnorr signature.
+
+The output is a standard 64-byte BIP340 signature that verifies under a standard
+32-byte x-only aggregate public key. The resulting signature is
+indistinguishable on-chain from a single-signer Taproot key-path spend and can
+be verified using ordinary BIP340 verification using only the aggregate x-only
+public key, without revealing or requiring knowledge of the underlying signer
+set or Taproot script tree. The scheme supports [[bip-0032.mediawiki|BIP32]] key
+derivation and [[bip-0341.mediawiki|BIP341]] Taproot tweaking, and is compatible
+with existing protocols that consume MuSig2 outputs.
