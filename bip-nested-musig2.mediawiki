@@ -1,0 +1,11 @@
+<pre>
+  BIP: XXX
+  Title: NestedMuSig2 for BIP340-compatible Nested Multi-Signatures
+  Author: Beulah Evanjalin <beulahebenezer777@gmail.com>
+  Status: Draft
+  Type: Informational
+  Created: 2026-06-08
+  License: BSD-3-Clause
+  Requires: 327, 340
+  Post-History: TBD
+</pre>
