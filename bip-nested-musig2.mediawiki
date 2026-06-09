@@ -31,3 +31,67 @@ public key, without revealing or requiring knowledge of the underlying signer
 set or Taproot script tree. The scheme supports [[bip-0032.mediawiki|BIP32]] key
 derivation and [[bip-0341.mediawiki|BIP341]] Taproot tweaking, and is compatible
 with existing protocols that consume MuSig2 outputs.
+
+===Copyright===
+
+This document is licensed under the 3-clause BSD license.
+
+===Motivation===
+
+[[bip-0327.mediawiki|BIP327]] (MuSig2) allows a flat set of ''n'' co-signers to
+create a single aggregate public key and cooperatively produce an ordinary
+Schnorr signature that verifies under [[bip-0340.mediawiki|BIP340]]. The
+aggregate public key is computed from the individual public keys of all
+participants, and the resulting signature is indistinguishable from a signature
+created by a single signer holding the corresponding aggregate secret key.
+
+MuSig2 is an ''n''-of-''n'' multi-signature scheme in which every signer whose
+public key is included in the aggregate key must participate in each signing
+session. After the aggregate key has been established, signers exchange public
+nonces and then partial signatures, allowing signing to complete in two
+communication rounds.
+
+This model works well when the signing group is naturally flat: each participant
+is a single logical signer, and every participant is expected to contribute to
+every signature. However, many Bitcoin applications are not naturally flat. A
+participant in one protocol may itself be a signing group with its own internal
+MuSig2 aggregate key, coordination process, and availability assumptions.
+Flattening all such internal keys into a single MuSig2 aggregate removes this
+group structure and treats every leaf key as a direct participant in one global
+signing session.
+
+In such applications, flattening can have several undesirable effects. It can
+reveal internal signer sets to other protocol participants, require parties
+outside a group to reason about that group's internal key structure, and make
+the outer protocol depend directly on every individual leaf signer rather than
+on logical signer groups.
+
+Consider the following examples:
+
+* '''Institutional custody''': a custodian may operate several geographically separated signing devices under an internal MuSig2 policy. Externally, the custodian may appear as one logical signer in a protocol shared with a client or another institution. Flattening the custodian's internal keys together with the external participant's keys exposes the custodian's internal signer set to the counterparty and makes the external protocol depend directly on every internal device.
+
+* '''Lightning channel factories''': a channel factory may involve participants that are themselves represented by MuSig2 signing groups. Flattening every underlying key into one aggregate key removes the distinction between participants and their internal signing groups. It also turns signing into a single all-leaf-signers-required protocol rather than a protocol between logical participants.
+
+* '''Ark-style VTXO trees''': Ark and related constructions organize virtual UTXOs using trees of off-chain transactions. When aggregate keys are used at multiple levels of such a construction, a flat list of all leaf keys does not naturally preserve the hierarchical relationship between transaction-tree nodes and signing groups.
+
+* '''Corporate treasury''': an executive group, a compliance group, and a finance group may each maintain separate MuSig2 signing arrangements. A final treasury authorization may require participation by each group while keeping each group's internal signer set hidden from the others. Flattening all keys into one aggregate exposes those internal structures and makes the protocol depend on every individual leaf signer.
+
+NestedMuSig2 addresses this by allowing a participant public key at one level of
+a MuSig2 signing session to itself be a MuSig2 aggregate key. The result is a
+tree of signing groups whose root key is still an ordinary BIP340-compatible
+x-only public key, and whose final signature is still an ordinary BIP340
+signature.
+
+This preserves the verifier-facing properties of MuSig2. A verifier only sees a
+BIP340 public key and a BIP340 signature. The verifier does not need to know
+whether the signing key was produced by a single signer, a flat MuSig2 group, or
+a nested tree of MuSig2 groups.
+
+NestedMuSig2 also preserves the two-round signing structure of MuSig2. Each leaf
+signer participates in one nonce-exchange round and one partial-signature round,
+while aggregation is performed recursively by coordinators at each level of the
+tree.
+
+This BIP specifies the additional nonce aggregation, signing, and partial
+signature aggregation rules required to make such recursive composition
+well-defined and compatible with BIP340 verification.
