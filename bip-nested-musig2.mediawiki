@@ -247,7 +247,6 @@ Algorithm ''KeyAgg(pk<sub>1..u</sub>)'':
 * ''gacc = 1'' is the accumulated parity factor, initially the identity.
 * ''tacc = 0'' is the accumulated tweak scalar modulo ''n'', initially zero.
 
-
 The values ''(Q, gacc, tacc)'' are updated by ''ApplyTweak'' and are used when deriving signer-specific secret-key contributions.
 
 The aggregate public key is computed as
@@ -260,8 +259,6 @@ a_i = KeyAggCoeff(pk_1..u, pk_i).
 
 The coefficient assignment prevents rogue-key attacks while preserving compatibility with the MuSig2 optimization that assigns coefficient 1 to the second distinct key in the sorted key list.
 
-
-
 ====Recursive Tree Application====
 
 In NestedMuSig2, ''KeyAgg'' is applied once at every level of the signing tree, working from the leaves up to the root. At each level, the aggregate output key of that level becomes a plain input key to the ''KeyAgg'' call at the level above. 
@@ -270,21 +267,17 @@ Let ''pk<sub>1,d</sub>'' denote the public key representing the subtree containi
 
 For a signer at depth &Lambda;−1 walking up to the root, the key aggregation procedure is:
 # '''Leaf level''': the signer computes ''pk<sub>1,&Lambda;−1</sub> = IndividualPubkey(sk<sub>1</sub>)''.
-# '''Leaf aggregation''': the leaf coordinator collects all leaf public keys ''L<sub>&Lambda;−1</sub> = KeySort({pk<sub>1,&Lambda;−1</sub>, ..., pk<sub>n,&Lambda;−1</sub>})'', runs ''ctx = KeyAgg(L<sub>&Lambda;−1</sub>)'', and derives the subtree public key for the parent level, ''pk<sub>1,&Lambda;−2</sub> = PlainPk(cbytes(ctx.Q))''. The resulting KeyAggContext(''gacc'' and ''tacc'' from this ''ctx'') MUST be discarded after serialization.
-# '''Each intermediate level (depth ''d'', from ''&Lambda;−2'' down to ''1'')''': the coordinator collects the plain public keys of its children, sorts them, runs ''KeyAgg'', and derives the subtree public key for the next higher level, ''pk<sub>1,d−1</sub> = PlainPk(cbytes(KeyAgg(L<sub>d</sub>).Q))''. Again ''gacc'' and ''tacc'' are discarded.
-# '''Root level (depth 0)''': the root coordinator computes ''root_ctx = KeyAgg(L<sub>0</sub>)'' and retains the resulting ''KeyAggContext'' for signing. The root aggregate public key is ''X&#771; = GetXonlyPubkey(root_ctx) = xbytes(root_ctx.Q)''. This is the BIP340 x-only public key used for on-chain signature verification.
+# '''Each intermediate level (depth ''d'', from ''&Lambda;−2'' down to ''0'')''': the coordinator collects the plain public keys of its children, sorts them, runs ''KeyAgg'', and derives the subtree public key for the next higher level, ''pk<sub>1,d−1</sub> = PlainPk(cbytes(KeyAgg(L<sub>d</sub>).Q))''.
+# '''Root level (depth -1)''': the root coordinator computes ''root_ctx = KeyAgg(L<sub>0</sub>)'' and retains the resulting ''KeyAggContext'' for signing. The root aggregate public key is ''X&#771; = GetXonlyPubkey(root_ctx) = xbytes(root_ctx.Q)''. This is the BIP340 x-only public key used for on-chain signature verification.
 
-'''Serialization boundary (normative)''': at every intermediate level, ''KeyAgg'' returns a ''KeyAggContext''. Only ''cbytes(ctx.Q)'', the 33-byte compressed point, is passed to the parent level as a ''PlainPk''. The ''KeyAggContext'' object itself must never cross a level boundary. The ''gacc'' and ''tacc'' values from intermediate levels are discarded; only the root ''KeyAggContext'' carries them forward to signing.
-
-The reason is that ''gacc'' and ''tacc'' at an intermediate level track parity and tweak state for that level's aggregation. They have no meaning at the parent level, which starts a fresh aggregation over the serialized point.
-
-Although intermediate ''gacc'' and ''tacc'' values are discarded, each signer MUST retain the ordered list of key-aggregation coefficients ''a<sub>1,d</sub>'' along its path from leaf to root. These coefficients are later used by ''Sign'' when computing the accumulated challenge coefficient ''&#269;''.
+'''Serialization boundary (normative)''': at every intermediate level, ''KeyAgg'' returns a ''KeyAggContext''. Only ''cbytes(ctx.Q)'', the 33-byte compressed point, is passed to the parent level as a ''PlainPk''.
 
 Key aggregation is non-interactive: each level requires only the plain public keys of its immediate children. No signing rounds are needed. 
 
 ====ApplyTweak====
 
-The root aggregate key may be tweaked after ''KeyAgg(L<sub>0</sub>)'' for BIP32 key derivation or BIP341 Taproot script commitments. In NestedMuSig2, ''ApplyTweak'' MUST only be applied to the ''root_ctx'' returned by the root-level ''KeyAgg'' invocation. Intermediate ''KeyAggContext'' objects are discarded during recursive aggregation and therefore cannot be tweaked.
+The root aggregate key may be tweaked after ''KeyAgg(L<sub>0</sub>)'' for BIP32 key derivation or BIP341 Taproot script commitments. In NestedMuSig2, ''ApplyTweak'' MUST only be applied to the ''root_ctx'' returned by the root-level ''KeyAgg'' invocation during the ''sign'' invocation by the leaf node.
+The tweaking logic is the same as in MuSig2.
 
 Algorithm ''ApplyTweak(keyagg_ctx, tweak, is_xonly)'':
 * Inputs:
