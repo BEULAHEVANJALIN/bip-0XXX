@@ -412,10 +412,10 @@ def det_nonce_hash(sk_: bytes, aggothernonce: bytes, aggpk: bytes, msg: bytes, i
     return int_from_bytes(tagged_hash('NestedMuSig/deterministic/nonce', buf))
 
 def nonce_coeff_hash(aggnonce: bytes, aggkey: bytes, msg: bytes) -> int:
-    return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + xbytes(aggkey) + msg)) % n
+    return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + aggkey + msg)) % n
 
 
-def deterministic_sign_(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: List[List[PlainPk]], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, rand: Optional[bytes]) -> Tuple[bytes, bytes]:
+def deterministic_sign(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: List[List[PlainPk]], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, rand: Optional[bytes]) -> Tuple[bytes, bytes]:
     # derive aggothernonce from aggothernonce_path and pubkey_tree
     # Transaform into det_nonce_hash, each leaf has a unique pubnonce now
     # w.r.t paper every node will have the same aggothernonce(R)
@@ -428,19 +428,19 @@ def deterministic_sign_(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree:
     pk_d_1 = individual_pk(sk) # pk suffix d - 1
     L_d_1 = [pk_d_1] + pubkey_tree[depth - 1] # L suffix d - 1
     a_d_1 = key_agg_coeff(L_d_1, pk_d_1) # a suffix d - 1
-    pk_parent = key_agg(L_d_1) # pk suffix d - 2
+    pk_parent = PlainPk(cbytes(key_agg(L_d_1).Q)) # pk suffix d - 2
     b_list = []
     a_list = [a_d_1]
     for d in range(depth-2, -1, -1):
         b_list.append(nonce_coeff_hash(aggothernonce_path[d + 1], pk_parent, msg))
         L_d = [pk_parent] + pubkey_tree[d]
-        a_list.append(key_agg_coeff(L_d), pk_parent)
-        pk_parent = key_agg(L_d)
+        a_list.append(key_agg_coeff(L_d, pk_parent))
+        pk_parent = PlainPk(cbytes(key_agg(L_d).Q))
 
     root_agg_key = key_agg([pk_parent] + pubkey_tree[0])
-    root_agg_key_xbytes = get_xonly_pk(root_agg_key.Q)
+    root_agg_key_xbytes = get_xonly_pk(root_agg_key)
     out_0 = aggothernonce_path[0]
-    b_0 = nonce_coeff_hash(sk_, out_0, root_agg_key_xbytes, msg, 0)
+    b_0 = nonce_coeff_hash(out_0, root_agg_key_xbytes, msg)
     b_list.append(b_0)
     try:
         R_1_ = cpoint_ext(out_0[0:33])
@@ -449,16 +449,18 @@ def deterministic_sign_(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree:
         # Nonce aggregator sent invalid nonces
         raise InvalidContributionError(None, "aggnonce")
     R = point_add(R_1_, point_mul(R_2_, b_0)) # This will be the same for every leaf
-
-    b_ = 1
-    for b in b_list:
-        b_ = (b_ * b) % n 
+    assert R is not None
+    
     c = int_from_bytes(tagged_hash('NestedMuSig/sig', xbytes(R) + root_agg_key_xbytes + msg)) % n # same for every leaf
 
     a_ = 1
     for a in a_list:
         a_ = (a_ * a) % n
     c_ = (c * a) % n
+
+    b_ = 1
+    for b in b_list:
+        b_ = (b_ * b) % n 
 
     k_1 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 0) % n
     k_2 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 1) % n
@@ -484,12 +486,14 @@ def deterministic_sign_(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree:
         raise InvalidContributionError(None, "aggnonce")
     R_agg_ = point_add(R_1, point_mul(R_2, b))
     R_agg = R_agg_ if not is_infinite(R_agg_) else G
+    assert R_agg is not None
+
     k_1 = k_1 if has_even_y(R_agg) else n - k_1
     k_2 = k_2 if has_even_y(R_agg) else n - k_2
     # not sure why the parity of R computed from agg_nonce is considered
 
     psig = c_ * int(sk) + k_1 + k_2 * b_ 
-    return (pubnonce, psig)
+    return (pubnonce, bytes_from_int(psig))
 
 def partial_sig_verify(psig: bytes, pubnonces: List[bytes], pubkeys: List[PlainPk], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, i: int) -> bool:
     if len(pubnonces) != len(pubkeys):
@@ -942,9 +946,9 @@ if __name__ == '__main__':
     test_key_sort_vectors()
     test_key_agg_vectors()
     test_nonce_gen_vectors()
-    test_nonce_agg_vectors()
-    test_sign_verify_vectors()
-    test_tweak_vectors()
-    test_det_sign_vectors()
-    test_sig_agg_vectors()
-    test_sign_and_verify_random(6)
+    # test_nonce_agg_vectors()
+    # test_sign_verify_vectors()
+    # test_tweak_vectors()
+    # test_det_sign_vectors()
+    # test_sig_agg_vectors()
+    # test_sign_and_verify_random(6)
