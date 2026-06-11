@@ -450,29 +450,25 @@ def deterministic_sign(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: 
         raise InvalidContributionError(None, "aggnonce")
     R = point_add(R_1_, point_mul(R_2_, b_0)) # This will be the same for every leaf
     assert R is not None
-    
     c = int_from_bytes(tagged_hash('NestedMuSig/sig', xbytes(R) + root_agg_key_xbytes + msg)) % n # same for every leaf
-
     a_ = 1
     for a in a_list:
         a_ = (a_ * a) % n
     c_ = (c * a) % n
-
     b_ = 1
     for b in b_list:
         b_ = (b_ * b) % n 
-
     k_1 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 0) % n
     k_2 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 1) % n
     # k_1 == 0 or k_2 == 0 cannot occur except with negligible probability.
     assert k_1 != 0
     assert k_2 != 0
-
     R_s1 = point_mul(G, k_1)
     R_s2 = point_mul(G, k_2)
     assert R_s1 is not None
     assert R_s2 is not None
     pubnonce = cbytes(R_s1) + cbytes(R_s2)
+    aggothernonce = out_0
     secnonce = bytearray(bytes_from_int(k_1) + bytes_from_int(k_2) + individual_pk(sk))
     try:
         aggnonce = nonce_agg([pubnonce, out_0])
@@ -487,12 +483,10 @@ def deterministic_sign(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: 
     R_agg_ = point_add(R_1, point_mul(R_2, b))
     R_agg = R_agg_ if not is_infinite(R_agg_) else G
     assert R_agg is not None
-
     k_1 = k_1 if has_even_y(R_agg) else n - k_1
     k_2 = k_2 if has_even_y(R_agg) else n - k_2
     # not sure why the parity of R computed from agg_nonce is considered
-
-    psig = c_ * int(sk) + k_1 + k_2 * b_ 
+    psig = (c_ * int_from_bytes(sk) + k_1 + k_2 * b_) % n
     return (pubnonce, bytes_from_int(psig))
 
 def partial_sig_verify(psig: bytes, pubnonces: List[bytes], pubkeys: List[PlainPk], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, i: int) -> bool:
@@ -812,7 +806,7 @@ def test_det_sign_vectors() -> None:
         rand = bytes.fromhex(test_case["rand"]) if test_case["rand"] is not None else None
         expected = fromhex_all(test_case["expected"])
 
-        pubnonce, psig = deterministic_sign(sk, aggothernonce, pubkeys, tweaks, is_xonly, msg, rand)
+        pubnonce, psig = deterministic_sign(sk, [aggothernonce], [pubkeys], tweaks, is_xonly, msg, rand)
         assert pubnonce == expected[0]
         assert psig == expected[1]
 
@@ -832,7 +826,7 @@ def test_det_sign_vectors() -> None:
         signer_index = test_case["signer_index"]
         rand = bytes.fromhex(test_case["rand"]) if test_case["rand"] is not None else None
 
-        try_fn = lambda: deterministic_sign(sk, aggothernonce, pubkeys, tweaks, is_xonly, msg, rand)
+        try_fn = lambda: deterministic_sign(sk, [aggothernonce], [pubkeys], tweaks, is_xonly, msg, rand)
         assert_raises(exception, try_fn, except_fn)
 
 def test_sig_agg_vectors() -> None:
@@ -918,7 +912,7 @@ def test_sign_and_verify_random(iters: int) -> None:
         else:
             aggothernonce = nonce_agg([pubnonce_1])
             rand = secrets.token_bytes(32)
-            pubnonce_2, psig_2 = deterministic_sign(sk_2, aggothernonce, pubkeys, tweaks, is_xonly, msg, rand)
+            pubnonce_2, psig_2 = deterministic_sign(sk_2, [aggothernonce], [pubkeys], tweaks, is_xonly, msg, rand)
 
         pubnonces = [pubnonce_1, pubnonce_2]
         aggnonce = nonce_agg(pubnonces)
@@ -946,9 +940,9 @@ if __name__ == '__main__':
     test_key_sort_vectors()
     test_key_agg_vectors()
     test_nonce_gen_vectors()
-    # test_nonce_agg_vectors()
+    test_nonce_agg_vectors() # same as musig2, no changes needed
     # test_sign_verify_vectors()
     # test_tweak_vectors()
     # test_det_sign_vectors()
-    # test_sig_agg_vectors()
+    test_sig_agg_vectors()
     # test_sign_and_verify_random(6)
