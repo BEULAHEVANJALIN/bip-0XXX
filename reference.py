@@ -328,25 +328,29 @@ def nonce_agg_ext(nonce_internal: bytes, pk_internal: PlainPk) -> bytes:
     R_2 = point_mul(R_2_, b)
     return cbytes_ext(R_1) + cbytes_ext(R_2) 
 
+# All information in SessionContext are public
 SessionContext = NamedTuple('SessionContext', [('aggnonce', bytes),
-                                               ('pubkeys', List[PlainPk]),
+                                               ('keyagg_ctx', KeyAggContext),
+                                               ('b_path', List[int]),
+                                               ('a_path', List[int]),
                                                ('tweaks', List[bytes]),
                                                ('is_xonly', List[bool]),
                                                ('msg', bytes)])
 
-def key_agg_and_tweak(pubkeys: List[PlainPk], tweaks: List[bytes], is_xonly: List[bool]) -> KeyAggContext:
+def apply_tweaks(keyagg_ctx: KeyAggContext, tweaks: List[bytes], is_xonly: List[bool]) -> KeyAggContext:
     if len(tweaks) != len(is_xonly):
         raise ValueError('The `tweaks` and `is_xonly` arrays must have the same length.')
-    keyagg_ctx = key_agg(pubkeys)
     v = len(tweaks)
     for i in range(v):
         keyagg_ctx = apply_tweak(keyagg_ctx, tweaks[i], is_xonly[i])
     return keyagg_ctx
 
 def get_session_values(session_ctx: SessionContext) -> Tuple[Point, int, int, int, Point, int]:
-    (aggnonce, pubkeys, tweaks, is_xonly, msg) = session_ctx
-    Q, gacc, tacc = key_agg_and_tweak(pubkeys, tweaks, is_xonly)
-    b = int_from_bytes(tagged_hash('MuSig/noncecoef', aggnonce + xbytes(Q) + msg)) % n
+    (aggnonce, keyagg_ctx, b_path, a_path, tweaks, is_xonly, msg) = session_ctx
+    Q, gacc, tacc = apply_tweaks(keyagg_ctx, tweaks, is_xonly)
+    b = int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + xbytes(Q) + msg)) % n
+    for b_ in b_path:
+        b = (b * b_) % n
     try:
         R_1 = cpoint_ext(aggnonce[0:33])
         R_2 = cpoint_ext(aggnonce[33:66])
@@ -357,14 +361,9 @@ def get_session_values(session_ctx: SessionContext) -> Tuple[Point, int, int, in
     R = R_ if not is_infinite(R_) else G
     assert R is not None
     e = int_from_bytes(tagged_hash('BIP0340/challenge', xbytes(R) + xbytes(Q) + msg)) % n
+    for a_ in a_path:
+        e = (e * a_) % n
     return (Q, gacc, tacc, b, R, e)
-
-def get_session_key_agg_coeff(session_ctx: SessionContext, P: Point) -> int:
-    (_, pubkeys, _, _, _) = session_ctx
-    pk = PlainPk(cbytes(P))
-    if pk not in pubkeys:
-        raise ValueError('The signer\'s pubkey must be included in the list of pubkeys.')
-    return key_agg_coeff(pubkeys, pk)
 
 def sign(secnonce: bytearray, sk: bytes, session_ctx: SessionContext) -> bytes:
     (Q, gacc, _, b, R, e) = get_session_values(session_ctx)
@@ -387,10 +386,9 @@ def sign(secnonce: bytearray, sk: bytes, session_ctx: SessionContext) -> bytes:
     pk = cbytes(P)
     if not pk == secnonce[64:97]:
         raise ValueError('Public key does not match nonce_gen argument')
-    a = get_session_key_agg_coeff(session_ctx, P)
     g = 1 if has_even_y(Q) else n - 1
     d = g * gacc * d_ % n
-    s = (k_1 + b * k_2 + e * a * d) % n
+    s = (k_1 + b * k_2 + e * d) % n
     psig = bytes_from_int(s)
     R_s1 = point_mul(G, k_1_)
     R_s2 = point_mul(G, k_2_)
@@ -429,49 +427,34 @@ def deterministic_sign(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: 
     L_d_1 = [pk_d_1] + pubkey_tree[depth - 1] # L suffix d - 1
     a_d_1 = key_agg_coeff(L_d_1, pk_d_1) # a suffix d - 1
     pk_parent = PlainPk(cbytes(key_agg(L_d_1).Q)) # pk suffix d - 2
-    b_list = []
-    a_list = [a_d_1]
+    b_path = []
+    a_path = [a_d_1]
     for d in range(depth-2, -1, -1):
-        b_list.append(nonce_coeff_hash(aggothernonce_path[d + 1], pk_parent, msg))
+        b_path.append(nonce_coeff_hash(aggothernonce_path[d + 1], pk_parent, msg))
         L_d = [pk_parent] + pubkey_tree[d]
-        a_list.append(key_agg_coeff(L_d, pk_parent))
+        a_path.append(key_agg_coeff(L_d, pk_parent))
         pk_parent = PlainPk(cbytes(key_agg(L_d).Q))
 
-    root_agg_key = key_agg([pk_parent] + pubkey_tree[0])
-    root_agg_key_xbytes = get_xonly_pk(root_agg_key)
-    out_0 = aggothernonce_path[0]
-    b_0 = nonce_coeff_hash(out_0, root_agg_key_xbytes, msg)
-    b_list.append(b_0)
-    try:
-        R_1_ = cpoint_ext(out_0[0:33])
-        R_2_ = cpoint_ext(out_0[33:66])
-    except ValueError:
-        # Nonce aggregator sent invalid nonces
-        raise InvalidContributionError(None, "aggnonce")
-    R = point_add(R_1_, point_mul(R_2_, b_0)) # This will be the same for every leaf
-    assert R is not None
-    c = int_from_bytes(tagged_hash('NestedMuSig/sig', xbytes(R) + root_agg_key_xbytes + msg)) % n # same for every leaf
-    a_ = 1
-    for a in a_list:
-        a_ = (a_ * a) % n
-    c_ = (c * a) % n
-    b_ = 1
-    for b in b_list:
-        b_ = (b_ * b) % n 
-    k_1 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 0) % n
-    k_2 = det_nonce_hash(sk_, out_0, root_agg_key_xbytes, msg, 1) % n
+    root_agg_key_ctx = key_agg([pk_parent] + pubkey_tree[0])
+    root_agg_key_xbytes = get_xonly_pk(root_agg_key_ctx)
+    aggothernonce = aggothernonce_path[0]
+    b_0 = nonce_coeff_hash(aggothernonce, root_agg_key_xbytes, msg)
+    b_path.append(b_0)
+
+    k_1 = det_nonce_hash(sk_, aggothernonce, root_agg_key_xbytes, msg, 0) % n
+    k_2 = det_nonce_hash(sk_, aggothernonce, root_agg_key_xbytes, msg, 1) % n
     # k_1 == 0 or k_2 == 0 cannot occur except with negligible probability.
     assert k_1 != 0
     assert k_2 != 0
+
     R_s1 = point_mul(G, k_1)
     R_s2 = point_mul(G, k_2)
     assert R_s1 is not None
     assert R_s2 is not None
     pubnonce = cbytes(R_s1) + cbytes(R_s2)
-    aggothernonce = out_0
     secnonce = bytearray(bytes_from_int(k_1) + bytes_from_int(k_2) + individual_pk(sk))
     try:
-        aggnonce = nonce_agg([pubnonce, out_0])
+        aggnonce = nonce_agg([pubnonce, aggothernonce])
     except Exception:
         raise InvalidContributionError(None, "aggothernonce")
     try:
@@ -480,14 +463,9 @@ def deterministic_sign(sk: bytes, aggothernonce_path: List[bytes], pubkey_tree: 
     except ValueError:
         # Nonce aggregator sent invalid nonces
         raise InvalidContributionError(None, "aggnonce")
-    R_agg_ = point_add(R_1, point_mul(R_2, b))
-    R_agg = R_agg_ if not is_infinite(R_agg_) else G
-    assert R_agg is not None
-    k_1 = k_1 if has_even_y(R_agg) else n - k_1
-    k_2 = k_2 if has_even_y(R_agg) else n - k_2
-    # not sure why the parity of R computed from agg_nonce is considered
-    psig = (c_ * int_from_bytes(sk) + k_1 + k_2 * b_) % n
-    return (pubnonce, bytes_from_int(psig))
+    session_ctx = SessionContext(aggnonce, root_agg_key_ctx, b_path, a_path, tweaks, is_xonly, msg)
+    psig = sign(secnonce, sk, session_ctx)
+    return (pubnonce, psig)
 
 def partial_sig_verify(psig: bytes, pubnonces: List[bytes], pubkeys: List[PlainPk], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, i: int) -> bool:
     if len(pubnonces) != len(pubkeys):
@@ -508,10 +486,9 @@ def partial_sig_verify_internal(psig: bytes, pubnonce: bytes, pk: bytes, session
     Re_s_ = point_add(R_s1, point_mul(R_s2, b))
     Re_s = Re_s_ if has_even_y(R) else point_negate(Re_s_)
     P = cpoint(pk)
-    a = get_session_key_agg_coeff(session_ctx, P)
     g = 1 if has_even_y(Q) else n - 1
     g_ = g * gacc % n
-    return point_mul(G, s) == point_add(Re_s, point_mul(P, e * a * g_ % n))
+    return point_mul(G, s) == point_add(Re_s, point_mul(P, e * g_ % n))
 
 def partial_sig_agg(psigs: List[bytes], session_ctx: SessionContext) -> bytes:
     (Q, _, tacc, _, R, e) = get_session_values(session_ctx)
@@ -595,7 +572,7 @@ def test_key_agg_vectors() -> None:
         tweaks = [T[i] for i in test_case["tweak_indices"]]
         is_xonly = test_case["is_xonly"]
 
-        assert_raises(exception, lambda: key_agg_and_tweak(pubkeys, tweaks, is_xonly), except_fn)
+        assert_raises(exception, lambda: apply_tweaks(pubkeys, tweaks, is_xonly), except_fn)
 
 def test_nonce_gen_vectors() -> None:
     with open(os.path.join(sys.path[0], 'vectors', 'nonce_gen_vectors.json')) as f:
@@ -861,7 +838,7 @@ def test_sig_agg_vectors() -> None:
         session_ctx = SessionContext(aggnonce, pubkeys, tweaks, is_xonly, msg)
         sig = partial_sig_agg(psigs, session_ctx)
         assert sig == expected
-        aggpk = get_xonly_pk(key_agg_and_tweak(pubkeys, tweaks, is_xonly))
+        aggpk = get_xonly_pk(apply_tweaks(pubkeys, tweaks, is_xonly))
         assert schnorr_verify(msg, aggpk, sig)
 
     for test_case in error_test_cases:
@@ -898,7 +875,7 @@ def test_sign_and_verify_random(iters: int) -> None:
         v = secrets.randbelow(4)
         tweaks = [secrets.token_bytes(32) for _ in range(v)]
         is_xonly = [secrets.choice([False, True]) for _ in range(v)]
-        aggpk = get_xonly_pk(key_agg_and_tweak(pubkeys, tweaks, is_xonly))
+        aggpk = get_xonly_pk(apply_tweaks(pubkeys, tweaks, is_xonly))
 
         # Use a non-repeating counter for extra_in
         secnonce_1, pubnonce_1 = nonce_gen(sk_1, pk_1, aggpk, msg, i.to_bytes(4, 'big'))
@@ -943,6 +920,6 @@ if __name__ == '__main__':
     test_nonce_agg_vectors() # same as musig2, no changes needed
     # test_sign_verify_vectors()
     # test_tweak_vectors()
-    # test_det_sign_vectors()
+    test_det_sign_vectors()
     test_sig_agg_vectors()
-    # test_sign_and_verify_random(6)
+    test_sign_and_verify_random(6)
