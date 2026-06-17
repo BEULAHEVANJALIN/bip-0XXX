@@ -12,6 +12,8 @@ class Node:
     out: bytes = None
     state: bytearray = None
     out_internal: bytes = None
+    out_: bytes = None
+    state_: bytes = None
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -81,10 +83,8 @@ def print_tree(node: Node, prefix: str = "", is_last: bool = True) -> None:
         print_tree(child, child_prefix, index == len(node.children) - 1)
 
 
-# Example
-root = parse_forest("A(B(D,E),C),X,Y(Z)")
-
-print_tree(root)
-
-root = parse_forest("Abby(Alice,Bob),Carol", root_name="Alberic") # Example in the paper
-print_tree(root)
+# # Example
+# root = parse_forest("A(B(D,E),C),X,Y(Z)")
+# print_tree(root)
+# root = parse_forest("Abby(Alice,Bob),Carol", root_name="Alberic") # Example in the paper
+# print_tree(root)
