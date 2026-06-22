@@ -98,6 +98,7 @@ def schnorr_verify(msg: bytes, pubkey: bytes, sig: bytes) -> bool:
     e = int_from_bytes(tagged_hash("BIP0340/challenge", sig[0:32] + pubkey + msg)) % n
     R = point_add(point_mul(G, s), point_mul(P, n - e))
     if (R is None) or (not has_even_y(R)) or (x(R) != r):
+        print("R verification failed")
         return False
     return True
 
@@ -223,9 +224,9 @@ def key_agg_coeff(pubkeys: List[PlainPk], pk_: PlainPk) -> int:
     return key_agg_coeff_internal(pubkeys, pk_, pk2)
 
 def key_agg_coeff_internal(pubkeys: List[PlainPk], pk_: PlainPk, pk2: PlainPk) -> int:
-    L = hash_keys(pubkeys)
     if pk_ == pk2:
         return 1
+    L = hash_keys(pubkeys)
     return int_from_bytes(tagged_hash('KeyAgg coefficient', L + pk_)) % n
 
 def apply_tweak(keyagg_ctx: KeyAggContext, tweak: bytes, is_xonly: bool) -> KeyAggContext:
@@ -248,6 +249,19 @@ def apply_tweak(keyagg_ctx: KeyAggContext, tweak: bytes, is_xonly: bool) -> KeyA
 
 def bytes_xor(a: bytes, b: bytes) -> bytes:
     return bytes(x ^ y for x, y in zip(a, b))
+
+def nonce_hash(rand: bytes, pk: PlainPk, aggpk: XonlyPk, i: int, msg_prefixed: bytes, extra_in: bytes) -> int:
+    buf = b''
+    buf += rand
+    buf += len(pk).to_bytes(1, 'big')
+    buf += pk
+    buf += len(aggpk).to_bytes(1, 'big')
+    buf += aggpk
+    buf += msg_prefixed
+    buf += len(extra_in).to_bytes(4, 'big')
+    buf += extra_in
+    buf += i.to_bytes(1, 'big')
+    return int_from_bytes(tagged_hash('NestedMuSig/nonce', buf))
 
 def nonce_gen_internal(rand_: bytes, sk: Optional[bytes], pk: PlainPk, aggpk: Optional[XonlyPk], msg: Optional[bytes], extra_in: Optional[bytes]) -> Tuple[bytearray, bytes]:
     if sk is not None:
@@ -303,27 +317,14 @@ def nonce_agg(pubnonces: List[bytes]) -> bytes:
 # End of helper functions copied from BIP-327 reference implementation.
 #
 
-def nonce_hash(rand: bytes, pk: PlainPk, aggpk: XonlyPk, i: int, msg_prefixed: bytes, extra_in: bytes) -> int:
-    buf = b''
-    buf += rand
-    buf += len(pk).to_bytes(1, 'big')
-    buf += pk
-    buf += len(aggpk).to_bytes(1, 'big')
-    buf += aggpk
-    buf += msg_prefixed
-    buf += len(extra_in).to_bytes(4, 'big')
-    buf += extra_in
-    buf += i.to_bytes(1, 'big')
-    return int_from_bytes(tagged_hash('NestedMuSig/nonce', buf))
-
-def nonce_agg_ext(nonce_internal: bytes, pk_internal: PlainPk) -> bytes:
+def nonce_agg_ext(nonce_internal: bytes, pk_internal: Point) -> bytes:
     try:
         R_1_ = cpoint_ext(nonce_internal[0:33])
         R_2_ = cpoint_ext(nonce_internal[33:66])
     except ValueError:
         # Nonce aggregator sent invalid nonces
         raise InvalidContributionError(None, "aggnonce")
-    b = int_from_bytes(tagged_hash('NestedMuSig/noncecoef', pk_internal + nonce_internal)) % n
+    b = nonce_coeff_hash(nonce_internal, pk_internal, b'')
     R_1 = R_1_
     R_2 = point_mul(R_2_, b)
     return cbytes_ext(R_1) + cbytes_ext(R_2) 
@@ -343,27 +344,47 @@ def apply_tweaks(keyagg_ctx: KeyAggContext, tweaks: List[bytes], is_xonly: List[
         keyagg_ctx = apply_tweak(keyagg_ctx, tweaks[i], is_xonly[i])
     return keyagg_ctx
 
+def nonce_coeff_hash(aggnonce: bytes, aggkey: Point, msg: bytes) -> int:
+    return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + xbytes(aggkey) + msg)) % n
+
+    # aggkey_bytes = bytes(aggkey)
+    # buf = b''
+    # buf += aggnonce
+    # buf += aggkey_bytes
+    # buf += msg
+    
+    # print('aggnonce', aggnonce.hex())
+    # print('aggkey', aggkey.hex())
+    # print('aggkey bytes', bytes(aggkey).hex())
+    # print('msg', msg.hex())
+    # return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', buf)) % n
+
+def print_tree_path(pk_level: List[PlainPk]):
+        print(f"Nodes at level: {[pk.hex().upper() for pk in pk_level]}")
+
 def get_session_values(session_ctx: SessionContext, pk: PlainPk) -> Tuple[Point, int, int, int, Point, int]:
     (nonce_path, pk_tree, tweaks, is_xonly, msg) = session_ctx
     depth = len(pk_tree)
     pk_d_1 = pk # pk suffix d - 1
-    L_d_1 = [pk_d_1] + pk_tree[depth - 1] # L suffix d - 1
+    L_d_1 = key_sort([pk_d_1] + pk_tree[depth - 1]) # L suffix d - 1
     a_d_1 = key_agg_coeff(L_d_1, pk_d_1) # a suffix d - 1
-    pk_parent = PlainPk(cbytes(key_agg(L_d_1).Q)) # pk suffix d - 2
+    pk_parent = key_agg(L_d_1).Q # pk suffix d - 2
     b_path = []
     a_path = [a_d_1]
     for d in range(depth-2, -1, -1):
-        b_path.append(nonce_coeff_hash(nonce_path[d + 1], pk_parent, msg))
-        L_d = [pk_parent] + pk_tree[d]
-        a_path.append(key_agg_coeff(L_d, pk_parent))
-        pk_parent = PlainPk(cbytes(key_agg(L_d).Q))
+        b_path.append(nonce_coeff_hash(nonce_path[d + 1], pk_parent, b''))
+        pk_parent_bytes = PlainPk(cbytes(pk_parent))
+        L_d_1 = key_sort([pk_parent_bytes] + pk_tree[d])
+        a_path.append(key_agg_coeff(L_d_1, pk_parent_bytes))
+        pk_parent = key_agg(L_d_1).Q
 
-    root_agg_key_ctx = key_agg([pk_parent] + pk_tree[0])
+    assert len(b_path) == len(a_path) - 1
+
+    root_agg_key_ctx = key_agg(L_d_1)
+    assert pk_parent == root_agg_key_ctx.Q
     aggnonce = nonce_path[0]
     Q, gacc, tacc = apply_tweaks(root_agg_key_ctx, tweaks, is_xonly)
-    b = int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + xbytes(Q) + msg)) % n
-    for b_ in b_path:
-        b = (b * b_) % n
+    b = nonce_coeff_hash(aggnonce, Q, msg)
     try:
         R_1 = cpoint_ext(aggnonce[0:33])
         R_2 = cpoint_ext(aggnonce[33:66])
@@ -373,6 +394,9 @@ def get_session_values(session_ctx: SessionContext, pk: PlainPk) -> Tuple[Point,
     R_ = point_add(R_1, point_mul(R_2, b))
     R = R_ if not is_infinite(R_) else G
     assert R is not None
+
+    for b_ in b_path:
+        b = (b * b_) % n
     e = int_from_bytes(tagged_hash('BIP0340/challenge', xbytes(R) + xbytes(Q) + msg)) % n
     for a_ in a_path:
         e = (e * a_) % n
@@ -411,19 +435,6 @@ def sign(secnonce: bytearray, sk: bytes, session_ctx: SessionContext) -> bytes:
     # Optional correctness check. The result of signing should pass signature verification.
     assert partial_sig_verify_internal(psig, pubnonce, pk, session_ctx)
     return xbytes(R), psig
-
-def det_nonce_hash(sk_: bytes, aggothernonce: bytes, aggpk: bytes, msg: bytes, i: int) -> int:
-    buf = b''
-    buf += sk_
-    buf += aggothernonce
-    buf += aggpk
-    buf += len(msg).to_bytes(8, 'big')
-    buf += msg
-    buf += i.to_bytes(1, 'big')
-    return int_from_bytes(tagged_hash('NestedMuSig/deterministic/nonce', buf))
-
-def nonce_coeff_hash(aggnonce: bytes, aggkey: bytes, msg: bytes) -> int:
-    return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + aggkey + msg)) % n
 
 def partial_sig_verify(psig: bytes, pubnonces: List[bytes], pubkeys: List[PlainPk], tweaks: List[bytes], is_xonly: List[bool], msg: bytes, i: int) -> bool:
     if len(pubnonces) != len(pubkeys):

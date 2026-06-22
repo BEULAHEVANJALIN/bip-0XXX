@@ -110,43 +110,51 @@ All notation from BIP327 §Algorithms' §Notation applies here. Additional
 notation introduced by this BIP:
 
 ; Tree structure
-
-* ''&Lambda;'' denotes the depth of the signing tree, a positive integer. Depth ''0'' is the root; depth ''&Lambda;−1'' is the leaf level.
-* ''d'' denotes a tree depth index, ranging from ''0'' (root) to ''&Lambda;−1'' (leaf).
-* ''n<sub>d</sub>'' denotes the number of participants (keys or sub-groups) at depth ''d''.
-* ''pk<sub>i,d</sub>'' denotes participant ''i'' 's plain public key at depth ''d''. At depth &Lambda;−1 this is an individual signer's plain public key. At depths 0..&Lambda;−2 it is the plain aggregate key of a sub-tree, i.e. ''cbytes(KeyAgg(L<sub>d</sub>).Q)'' for the appropriate child list.
-* ''L<sub>d</sub>'' denotes the ordered list of plain public keys that are input to ''KeyAgg'' at depth ''d''. The list ''L<sub>0</sub>'' produces the root aggregate key ''X&#771;''.
+* ''&Lambda;'' denotes the number of aggregation levels in the signing tree, where ''&Lambda;'' is a positive integer. Depth 0 corresponds to the root, and depth ''&Lambda;−1'' corresponds to the leaf level. All depth indices in this specification are 0-indexed.
+* ''d'' denotes a tree depth index, ranging from ''0'' (root) to ''&Lambda;−1'' (leaf level).
+* ''n<sub>d</sub>'' denotes the number of participants in ''L<sub>d</sub>'' at depth ''d''.  At depth ''&Lambda;−1'' these are individual signers. At depths ''0..&Lambda;−2'' these are aggregate subgroups, each represented by a single plain public key.
+* ''L<sub>d</sub>'' denotes the ordered list of plain public keys that are aggregated together at depth ''d'' to produce signer 1's parent key ''pk<sub>1,d-1</sub>'', with ''|L<sub>d</sub>| = n<sub>d</sub>''. At depth ''&Lambda;−1'', each entry is an individual signer's plain public key. At depths ''0..&Lambda;−2'', each entry is the plain aggregate key corresponding to the subtree rooted at the corresponding node. The list is ordered by applying ''KeySort'' to the set of participant keys before passing it to ''KeyAgg'', following the same convention as BIP327. Changing the ordering changes the resulting aggregate key and all downstream coefficients. ''KeyAgg(L<sub>d</sub>)'' produces ''pk<sub>1,d−1</sub>''. At depth 0, ''KeyAgg(L<sub>0</sub>) = X&#771;''.
+* ''pk<sub>i,d</sub>'' denotes the i-th entry in ''L<sub>d</sub>'', where ''1 &le; i &le; n<sub>d</sub>''. By definition, ''pk<sub>i,d</sub> &in; L<sub>d</sub>''. At depth ''&Lambda;−1'', ''pk<sub>i,d</sub>'' is an individual signer's plain public key. At depths ''0..&Lambda;−2'', ''pk<sub>i,d</sub>'' is the plain aggregate key of the subtree rooted at node ''i'' at depth ''d''.
+* For each node ''i'' at depth ''d'', where ''0 &le; d &lt; &Lambda;−1'', ''pk<sub>i,d</sub>'' is obtained by applying ''KeyAgg'' to the ordered list of child public keys belonging to the subtree rooted at node ''i'' at depth ''d''.
+* ''L<sub>0</sub>'' denotes the ordered list of plain public keys at depth 0. The root aggregate key is obtained by applying ''KeyAgg'' to ''L<sub>0</sub>''. The root aggregate key is denoted by ''X&#771;'', where ''X&#771; = KeyAgg(L<sub>0</sub>)''.
 
 ; Nonces
+* ''r<sub>1,j</sub>'' for ''j = 1..&nu;'' denotes signer 1's secret nonce scalars, sampled uniformly at random modulo ''p''. These are signer 1's ''state<sub>1</sub> = (r<sub>1,1</sub>,...,r<sub>1,ν</sub>)'' from the first signing round. They must never be reused across signing sessions.
+* ''out<sup>d</sup>'' for ''0 ≤ d < Λ'' denotes the internal aggregate nonce at depth ''d'': the output of ''SignAgg'' over all participants' nonce outputs at that depth. The paper calls this the "(internal) aggregate first-round message" at depth ''d''. This is what ''Sign''' receives directly as input — ''Sign''' takes the sequence ''(out<sup>d</sup>)<sub>0≤d<Λ</sub>'' as one of its inputs. The coordinator additionally applies ''SignAggExt'' to ''out<sup>d</sup>'' to produce an external nonce that is passed upward to the parent level; that external nonce is distinct from ''out<sup>d</sup>'' and is not received by ''Sign'''. ''out<sup>0</sup>'' is the root internal aggregate nonce.
+* ''(R<sub>1,0</sub>, ..., R<sub>&nu;,0</sub>) := out<sup>0</sup>'' denotes the &nu; nonce points extracted from the root aggregate nonce.
 
-* ''r<sub>1,j</sub>'' for ''j = 1..ν'' denotes signer 1's secret nonce scalars, sampled uniformly at random. These appear in the signing equation and must never be reused. 
-* ''out<sup>d</sup>'' denotes the 66-byte aggregate nonce at depth ''d'', produced by running ''NonceAgg'' then ''NonceAggExt'' at that level. ''out<sup>0</sup>'' is the root aggregate nonce. ''out<sup>d</sup>'' for ''d ≥ 1'' is the aggregate nonce of the sub-tree at depth ''d'', as passed up to the parent.
-* ''(R<sub>1,0</sub>, ..., R<sub>ν,0</sub>) := out<sup>0</sup>'' denotes the ν nonce points extracted from the root aggregate nonce.
+; SignAggExt binding factor
+* Inside ''SignAggExt(out, X&#771;)'', the coordinator computes a local binding factor ''b := H<sub>non</sub>(X&#771;, (R'<sub>1</sub>,...,R'<sub>ν</sub>))'', where ''X&#771;'' is the aggregate key of the signers at this level and ''(R'<sub>1</sub>,...,R'<sub>ν</sub>)'' are the ν nonce points from ''out''. This ''b'' is used immediately to produce the external nonce ''R<sub>j</sub> := (R'<sub>j</sub>)<sup>b<sup>j−1</sup></sup>'' and is not retained. It uses the <code>NestedMuSig/aggnoncecoef</code> tag.
 
 ; Per-level key-aggregation coefficients
-
-* ''a<sub>1,d</sub>'' denotes signer 1's key-aggregation coefficient at depth ''d'', computed as ''KeyAggCoeff(L<sub>d</sub>, pk<sub>1,d</sub>)''. One coefficient exists per level the signer traverses from leaf to root.
+* ''a<sub>1,d</sub>'' denotes signer 1's key-aggregation coefficient at depth ''d'', computed in ''Sign''' as ''KeyAggCoef(L<sub>d</sub>, pk<sub>1,d</sub>)''. One coefficient per depth level, collected for every level from leaf to root.
 
 ; Per-level nonce binding factors
-
-* ''b<sub>d+1</sub>'' for ''d = &Lambda;−2, ..., 0'' denotes the nonce binding factor derived at depth ''d'' during ''Sign<nowiki>'</nowiki>'', computed as ''H<sub>non</sub>(pk<sub>1,d</sub>, out<sup>d+1</sup>)''. It binds the sub-tree's aggregate nonce to signer 1's aggregate key at that level. Uses the <code>NestedMuSig/aggnoncecoef</code> tag. No message is included.
-* ''b<sub>0</sub>'' denotes the root-level nonce binding factor, computed as ''H<sub>non&#773;</sub>(X&#771;, (R<sub>1,0</sub>, ..., R<sub>ν,0</sub>), m)''. It binds the root aggregate nonce to the root aggregate key and the message. Uses the <code>NestedMuSig/noncecoef</code> tag. The message is included.
+These are computed by signer 1 during ''Sign''' and are distinct from the ''SignAggExt'' binding factor above, though both use ''H<sub>non</sub>''.
+* ''b<sub>d+1</sub>'' for ''d = &Lambda;−2, ..., 0'' denotes the nonce binding factor derived at depth ''d'' during ''Sign<nowiki>'</nowiki>'', computed as ''H<sub>non</sub>(pk<sub>1,d</sub>, out<sup>d+1</sup>)''. It binds the subtree's aggregate nonce to signer 1's aggregate key at that level. Uses the <code>NestedMuSig/aggnoncecoef</code> tag. No message is included.
+* ''b<sub>d</sub>'' for ''d ∈ {1,...,Λ−1}'' denotes the nonce binding factor at depth ''d'', computed as ''H<sub>non</sub>(X<sub>1,d−1</sub>, (R<sub>1,d</sub>,...,R<sub>ν,d</sub>))'', where ''X<sub>1,d−1</sub> := KeyAgg(L<sub>d</sub>)'' is the aggregate key one level above depth ''d'', and ''(R<sub>1,d</sub>,...,R<sub>ν,d</sub>)'' are the ν nonce points extracted from ''out<sup>d</sup>''. In terms of Fig. 6's loop variable: when the loop runs at ''d'' (from Λ−2 down to 0), it computes ''b<sub>d+1</sub> := H<sub>non</sub>(pk<sub>1,d</sub>, out<sup>d+1</sup>)'', which is the same computation with ''pk<sub>1,d</sub> = X<sub>1,d</sub>'' serving as the parent key for depth ''d+1''. Uses the <code>NestedMuSig/aggnoncecoef</code> tag. No message is included.
+* ''b<sub>0</sub>'' denotes the root-level nonce binding factor, computed as ''H<sub>non&#773;</sub>(X&#771;, (R<sub>1,0</sub>,...,R<sub>ν,0</sub>), m)'', where ''X&#771;'' is the root aggregate key and ''m'' is the message. Uses the <code>NestedMuSig/noncecoef</code> tag. The message is included. This is the only binding factor that incorporates the message.
+* ''b<sub>0</sub>'' denotes the root-level nonce binding factor, computed as ''H<sub>non&#773;</sub>(X&#771;, (R<sub>1,0</sub>, ..., R<sub>&nu;,0</sub>), m)''. It binds the root aggregate nonce to the root aggregate key and the message. Uses the <code>NestedMuSig/noncecoef</code> tag. The message is included.
 
 ; Accumulated products (computed in ''Sign<nowiki>'</nowiki>'')
 
 * ''b&#780;'' (b-check) denotes the accumulated product of all per-level nonce binding factors: ''b&#780; := &#8719;<sub>ℓ=0</sub><sup>&Lambda;−1</sup> b<sub>ℓ</sub> mod p''.
 * ''&#269;'' (c-check) denotes the accumulated challenge coefficient: ''&#269; := c · &#8719;<sub>ℓ=0</sub><sup>&Lambda;−1</sup> a<sub>1,ℓ</sub> mod p'', where ''c := H<sub>sig</sub>(X&#771;, R, m)''.
+* ''b&#780;'' (b-check) is the product of all per-level nonce binding factors: ''b&#780; := &#8719;<sub>ℓ=0</sub><sup>Λ−1</sup> b<sub>ℓ</sub> mod p''. It combines the message-bound root factor ''b<sub>0</sub>'' with all intermediate binding factors ''b<sub>1</sub>,...,b<sub>Λ−1</sub>''.
+* ''c'' denotes the Schnorr challenge: ''c := H<sub>sig</sub>(X&#771;, R, m)''.
+* ''&#269;'' (c-check) is the accumulated challenge coefficient: ''&#269; := c · &#8719;<sub>ℓ=0</sub><sup>Λ−1</sup> a<sub>1,ℓ</sub> mod p''. It combines the challenge with the product of all per-level key-aggregation coefficients.
+
 
 ; Effective root nonce
 
-* ''R'' denotes the effective root nonce point, computed from the root aggregate nonce as ''R := &#8719;<sub>j=1</sub><sup>ν</sup> R<sub>j,0</sub><sup>b<sub>0</sub><sup>j−1</sup></sup>''. For ν = 2 this is ''R<sub>1,0</sub> · R<sub>2,0</sub><sup>b<sub>0</sub></sup>''.
+* ''R'' denotes the effective root nonce point, computed from the root aggregate nonce as ''R := &#8719;<sub>j=1</sub><sup>&nu;</sup> R<sub>j,0</sub><sup>b<sub>0</sub><sup>j−1</sup></sup>''. For &nu; = 2 this is ''R<sub>1,0</sub> · R<sub>2,0</sub><sup>b<sub>0</sub></sup>''.
 
 ; Final signing equation (from ''Sign<nowiki>'</nowiki>'')
 
 The partial signature produced by signer 1 is:
-: ''s<sub>1</sub> := č · sk<sub>1</sub> + Σ<sub>j=1</sub><sup>ν</sup> r<sub>1,j</sub> · b&#780;<sup>j−1</sup> mod p''
+: ''s<sub>1</sub> := č · sk<sub>1</sub> + Σ<sub>j=1</sub><sup>&nu;</sup> r<sub>1,j</sub> · b&#780;<sup>j−1</sup> mod p''
 
-For ν = 2 this reduces to ''s<sub>1</sub> = č · sk<sub>1</sub> + r<sub>1,1</sub> + r<sub>1,2</sub> · b&#780; mod p''.
+For &nu; = 2 this reduces to ''s<sub>1</sub> = č · sk<sub>1</sub> + r<sub>1,1</sub> + r<sub>1,2</sub> · b&#780; mod p''.
 
 ===Tagged Hashes===
 
@@ -181,7 +189,7 @@ The algorithms in this section, ''IndividualPubkey'', ''KeySort'', ''KeyAgg'', '
 
 ====IndividualPubkey====
 
-Each leaf signer computes their plain public key from their secret key. This public key is used as input to key aggregation at the leaf level (depth ''Λ−1'') of the tree.
+Each leaf signer computes their plain public key from their secret key. This public key is used as input to key aggregation at the leaf level (depth ''&Lambda;−1'') of the tree.
 
 Algorithm ''IndividualPubkey(sk)'':
 * Inputs:
@@ -349,6 +357,6 @@ The full hierarchical nonce aggregation procedure for a coordinator at depth ''d
 # The result is ''out<sup>d</sup>'', the level-''d'' aggregate nonce.
 
 This is repeated for ''d = &Lambda;−2, &Lambda;−3, ..., 0''.
-At depth ''Λ−1'', each signer contributes its own ''pubnonce''. The first application of ''NonceAggExt'' is performed by the coordinator at depth ''Λ−2'' after aggregating the leaf nonces.
+At depth ''&Lambda;−1'', each signer contributes its own ''pubnonce''. The first application of ''NonceAggExt'' is performed by the coordinator at depth ''&Lambda;−2'' after aggregating the leaf nonces.
 
 The root coordinator obtains ''out<sup>0</sup>'', which is the aggregate nonce used for the signing session.

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from reference import KeyAggContext, PlainPk
 
 
@@ -75,13 +75,34 @@ def parse_forest(dsl: str, root_name: str = "ROOT") -> Node:
 
 def print_tree(node: Node, prefix: str = "", is_last: bool = True) -> None:
     connector = "└── " if is_last else "├── "
-    print(prefix + connector + node.value)
+    print(prefix + connector + node.pk.hex().upper())
+    # print(prefix + connector + node.value)
 
     child_prefix = prefix + ("    " if is_last else "│   ")
 
     for index, child in enumerate(node.children):
         print_tree(child, child_prefix, index == len(node.children) - 1)
 
+def print_tree_detailed(self, prefix: str = "", is_last: bool = True) -> None:
+        """Pretty-print the tree structure with all fields of each node."""
+        branch = "└── " if is_last else "├── "
+        print(prefix + branch + f"Node(value={self.value!r})")
+
+        # Print all fields except children
+        field_prefix = prefix + ("    " if is_last else "│   ")
+        for f in fields(self):
+            if f.name == "children":
+                continue
+            val = getattr(self, f.name)
+            print(f"{field_prefix}{f.name}: {val!r}")
+
+        # Print children
+        for i, child in enumerate(self.children):
+            print_tree_detailed(
+                child,
+                prefix=field_prefix,
+                is_last=(i == len(self.children) - 1),
+            )
 
 # # Example
 # root = parse_forest("A(B(D,E),C),X,Y(Z)")
