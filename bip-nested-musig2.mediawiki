@@ -98,11 +98,11 @@ well-defined and compatible with BIP340 verification.
 
 ==Algorithms==
 
-The following notation and all primitive algorithms (''IndividualPubkey'',
-''KeySort'', ''KeyAgg'', ''KeyAggCoeff'', ''ApplyTweak'', ''GetXonlyPubkey'',
-''GetPlainPubkey'', ''NonceGen'', ''NonceAgg'') are as defined in
-[[bip-0327.mediawiki|BIP327]]. This BIP does not restate them; implementers must
-implement BIP327 first.
+This BIP builds directly on BIP327. The notation and helper functions ''int(x)'', ''bytes(k, x)'', ''cbytes'', ''cbytes_ext'', ''xbytes'', ''cpoint'', ''cpoint_ext'', ''has_even_y'', the tagged-hash construction ''hash<sub>tag</sub>''), and primitive algorithms not explicitly redefined here are inherited from [[bip-0327.mediawiki|BIP327]]. In particular, the BIP327 algorithms ''IndividualPubkey'', ''KeySort'', ''KeyAgg'', ''KeyAggCoeff'', ''GetXonlyPubkey'', ''GetPlainPubkey'', ''ApplyTweak'', ''NonceGen'' and ''NonceAgg'' are used unchanged and are not restated in this specification.
+
+This specification replaces the BIP327 Session Context and the algorithms ''GetSessionValues'', ''GetSessionKeyAggCoeff'', ''Sign'', ''PartialSigVerify'', ''PartialSigVerifyInternal'', and ''PartialSigAgg'' with the nested versions specified below. It also introduces the new algorithm ''NonceAggExt''. No other BIP327 algorithm is incorporated by implication.
+
+This specification follows BIP327's distinction between ordinary failures and failures attributable to another party. ''Fail'' means that the algorithm terminates without producing an output. If the specification additionally instructs the implementation to blame a party for an invalid contribution, the failure is an ''InvalidContribution'' failure. Implementations SHOULD record the type of invalid contribution and the identity of the party to be blamed.
 
 ===Notation===
 
