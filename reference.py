@@ -459,8 +459,8 @@ def partial_sig_verify_internal(psig: bytes, pubnonce: bytes, pk: bytes, session
     g_ = g * gacc % n
     return point_mul(G, s) == point_add(Re_s, point_mul(P, e * g_ % n))
 
-def partial_sig_agg(psigs: List[bytes], session_ctx: SessionContext) -> bytes:
-    (Q, _, tacc, _, R, e) = get_session_values(session_ctx)
+# root_keyagg_ctx is not None only when the root aggregator calls it
+def partial_sig_agg(psigs: List[bytes], x_R: bytes, session_ctx: SessionContext = None, root_keyagg_ctx: KeyAggContext = None) -> bytes:
     s = 0
     u = len(psigs)
     for i in range(u):
@@ -468,9 +468,13 @@ def partial_sig_agg(psigs: List[bytes], session_ctx: SessionContext) -> bytes:
         if s_i >= n:
             raise InvalidContributionError(i, "psig")
         s = (s + s_i) % n
-    g = 1 if has_even_y(Q) else n - 1
-    s = (s + e * g * tacc) % n
-    return xbytes(R) + bytes_from_int(s)
+    if root_keyagg_ctx is not None and session_ctx is not None:
+        _, _, tweaks, is_xonly, _ = session_ctx
+        Q, _, tacc = apply_tweaks(root_keyagg_ctx, tweaks, is_xonly)
+        g = 1 if has_even_y(Q) else n - 1
+        e = int_from_bytes(tagged_hash('BIP0340/challenge', x_R + xbytes(Q) + session_ctx.msg)) % n
+        s = (s + e * g * tacc) % n
+    return bytes_from_int(s)
 #
 # The following code is only used for testing.
 #

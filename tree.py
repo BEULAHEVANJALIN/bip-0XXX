@@ -5,6 +5,7 @@ from reference import KeyAggContext, PlainPk
 @dataclass
 class Node:
     value: str
+    is_root: bool = False
     children: list["Node"] = field(default_factory=list)
     sk: bytes = None
     pk: PlainPk = None
@@ -60,6 +61,7 @@ def parse_forest(dsl: str, root_name: str = "ROOT") -> Node:
         return node
 
     root = Node(root_name)
+    root.is_root = True
 
     while i < len(s):
         root.children.append(parse_node())

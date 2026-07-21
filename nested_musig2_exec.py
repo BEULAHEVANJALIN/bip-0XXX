@@ -29,27 +29,26 @@ def print_tree_path(pk_tree: List[List[PlainPk]]):
     for i, siblings in enumerate(pk_tree):
         print(f"Node at depth {i} has siblings: {[pk.hex().upper() for pk in siblings]}")
 
-def round2(node: Node, nonce_path: List[bytes], pk_tree: List[List[PlainPk]], msg: bytes, tweaks: List[bytes] = [], is_xonly: List[bool] = [], rand:bytes = None):
+def round2(node: Node, session_ctx: SessionContext, rand:bytes = None):
     if node.is_leaf():
         print("ROUND 2 leaf node: " + node.value)
         # print_tree_path(pk_tree)
-        session_ctx = SessionContext(nonce_path, pk_tree, tweaks, is_xonly, msg)
         final_nonce, psig = sign(node.state, node.sk, session_ctx)
         node.out_ = psig
         node.state_ = final_nonce
     else:
+        nonce_path, pk_tree, tweaks, is_xonly, msg = session_ctx
         for w in node.children:
             siblings = [u.pk for u in node.children if u.pk != w.pk]
-            round2(w, nonce_path + [node.out_internal], pk_tree + [siblings], msg, tweaks, is_xonly, rand)
+            session_ctx_ = SessionContext(nonce_path + [node.out_internal], pk_tree + [siblings], tweaks, is_xonly, msg)
+            round2(w, session_ctx_, rand)
 
         node.state_ = node.children[0].state_ # same for every node
         psigs = [w.out_ for w in node.children]
 
-        # Aggregating without tweaks
-        s = 0
-        for i in range(len(psigs)):
-            s_i = int_from_bytes(psigs[i])
-            if s_i >= n:
-                raise InvalidContributionError(i, "psig")
-            s = (s + s_i) % n
-        node.out_ = bytes_from_int(s)
+        # Aggregating signatures of the children
+        if node.is_root:
+            s = partial_sig_agg(psigs, node.state_, session_ctx, node.keyagg_ctx)
+        else:
+            s = partial_sig_agg(psigs, node.state_)
+        node.out_ = s
