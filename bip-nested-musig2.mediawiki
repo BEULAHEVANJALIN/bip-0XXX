@@ -165,126 +165,34 @@ The challenge tag is unchanged from BIP340. Consequently, the final signature is
 
 ===Key Generation and Aggregation===
 
-The algorithms in this section, ''IndividualPubkey'', ''KeySort'', ''KeyAgg'', ''KeyAggCoeff'', and ''ApplyTweak'', are identical to those specified in BIP327. There are no modifications to their inputs, outputs, or algorithmic behavior. They are reproduced here in full because NestedMuSig2 invokes them at every level of the signing tree, and implementers must understand precisely which data are passed between levels.
+This specification uses the BIP327 algorithms ''IndividualPubkey'', ''KeySort'', ''KeyAgg'', ''KeyAggCoeff'', ''GetPlainPubkey'', ''GetXonlyPubkey'', and ''ApplyTweak'' unchanged. All input requirements, failure conditions, and serialization rules defined by those algorithms apply.
 
-====IndividualPubkey====
+====Nested Key Aggregation====
+Key aggregation is performed independently at every aggregation node. For a node at level ''d'' on a particular signer's path, let ''L<sub>d</sub>'' be the ''KeySort''-sorted list of participant plain public keys belonging to that node. The node's KeyAgg Context is computed as:''keyagg_ctx<sub>d</sub> = KeyAgg(L<sub>d</sub>)''.
 
-Each leaf signer computes their plain public key from their secret key. This public key is used as input to key aggregation at the leaf level (depth ''&Lambda;−1'') of the tree.
+Each aggregation node MUST create its own fresh KeyAgg Context using only the participant plain public keys belonging to that node. A child node's KeyAgg Context MUST NOT be used as an input to the parent node's KeyAgg invocation. For every non-root node at level ''d'', the node's aggregate public key is obtained using ''pk<sub>d−1</sub> = GetPlainPubkey(keyagg_ctx<sub>d</sub>)''. The resulting 33-byte plain public key ''pk<sub>d−1</sub>'' is used as a participant plain public key in the parent node's participant key list at level ''d-1''. Only the serialized plain public key is propagated between aggregation levels. The complete child KeyAgg Context is local to the child aggregation node and MUST NOT be propagated upward.
 
-Algorithm ''IndividualPubkey(sk)'':
-* Inputs:
-** The secret key ''sk'': a 32-byte array.
-* Let ''d = int(sk)''.
-* Fail if ''d = 0'' or ''d &ge; n''.
-* Let ''P = d·G''.
-* Return ''cbytes(P)''.
+In particular, the ''gacc'' and ''tacc'' values of an intermediate KeyAgg Context MUST NOT be propagated across aggregation levels. Each aggregation node MUST derive its aggregation state from the fresh KeyAgg Context returned by ''KeyAgg'' for its own participant key list.
 
-''cbytes(P)'' encodes an elliptic curve point as a 33-byte compressed public key: the prefix byte ''0x02'' if ''has_even_y(P)'', otherwise ''0x03'', followed by the 32-byte big-endian x-coordinate.
+====Intermediate Aggregate Key Representation====
+Using ''GetPlainPubkey'' preserves the parity of the intermediate aggregate point. Intermediate aggregate keys MUST therefore be represented as 33-byte BIP327 plain public keys and MUST NOT be converted to x-only public keys before being used as participant keys in a parent node's ''KeyAgg'' invocation. The parity information contained in the plain public key serialization is required because the intermediate aggregate key is interpreted as a participant plain public key at the next aggregation level.
 
-The output is a ''PlainPk'': a 33-byte array. At the leaf level, this output is provided as input to ''KeyAgg''.
+Intermediate aggregate public keys do not require explicit protocol transmission. Any participant that knows the complete nested public-key tree MUST be able to independently compute every intermediate aggregate public key.
 
-====KeySort====
+====Root Aggregation====
+The root node is aggregated using the same procedure as all other aggregation nodes. The root KeyAgg Context is computed as ''keyagg_ctx_root = KeyAgg(L<sub>0</sub>)'' where ''L<sub>0</sub>'' is the ''KeySort''-sorted list of participant plain public keys at the root level.
 
-Before calling ''KeyAgg'' at any level, the input list of plain public keys must be sorted.
+====Root-Level Aggregate-Key Tweaking====
+If the application specifies root-level aggregate-key tweaks, they MUST be applied sequentially to ''keyagg_ctx_root'' using ''ApplyTweak''. All participants MUST apply the same ordered sequence of tweaks. For each tweak, participants MUST use the corresponding ''is_xonly_t'' value specified by the application. After all root-level tweaks have been applied, ''keyagg_ctx_root'' refers to the final tweaked root KeyAgg Context. The final aggregate public key is obtained as ''aggpk = GetXonlyPubkey(keyagg_ctx<sub>0</sub>)''. 
 
-Algorithm ''KeySort(pk<sub>1..u</sub>)'':
-* Inputs:
-** Plain public keys ''pk<sub>1..u</sub>'': ''u'' 33-byte arrays.
-* Return ''pk<sub>1..u</sub>'' sorted in lexicographic order.
+The resulting 32-byte x-only public key ''aggpk'' is the public key used for BIP340 verification. The final tweaked root KeyAgg Context MUST be used by the nested signing algorithm, partial-signature verification algorithm, and final signature aggregation algorithm.
 
-''KeySort'' must be applied independently at every level of the tree before that level's ''KeyAgg'' call. Lexicographic sorting defines the canonical ordering of public keys.
+Root-level tweaks affect only the root KeyAgg Context. They MUST NOT be applied to intermediate aggregation nodes.
 
-====KeyAggCoeff====
+====Aggregate-Key Tweaking Restrictions====
+Aggregate-key tweaking is supported only at the root level of the nested aggregation tree. ''ApplyTweak'' MUST NOT be applied to the KeyAgg Context of any non-root aggregation node. Tweaking an intermediate aggregate key would modify the relationship between intermediate aggregate keys and the nested signing equations. Supporting such tweaks would require corresponding changes to the nested signing and partial-signature verification algorithms, which are not defined by this specification.
 
-''KeyAggCoeff'' computes the key-aggregation coefficient for a public key within a list. It implements ''H<sub>agg</sub>(L, X<sub>i</sub>)'' using the MuSig2* optimization that assigns coefficient 1 to the second distinct key in the list.
-
-The hash tags ''KeyAgg list'' and ''KeyAgg coefficient'' are the same as in BIP327. These tags are shared across all levels of the NestedMuSig2 tree. ''H<sub>agg</sub>'' is a single hash function applied at every depth, not a per-level function.
-
-Algorithm ''KeyAggCoeff(pk<sub>1..u</sub>, pk')'':
-* Inputs:
-** The list of plain public keys ''pk<sub>1..u</sub>'': ''u'' 33-byte arrays (The public keys MUST be sorted lexicographically by their 33-byte compressed encoding).
-** The target key ''pk' '': a 33-byte plain public key that must appear in ''pk<sub>1..u</sub>''. If ''pk' '' does not appear in ''pk<sub>1..u</sub>'', the function fails.
-* Let ''pk2 = GetSecondKey(pk<sub>1..u</sub>)''.
-* If ''pk' = pk2'': return 1.
-* Let ''L = hash<sub>KeyAgg list</sub>(pk<sub>1</sub> || pk<sub>2</sub> || ... || pk<sub>u</sub>)''.
-* Return ''int(hash<sub>KeyAgg coefficient</sub>(L || pk')) mod n''.
-
-Internal algorithm ''GetSecondKey(pk<sub>1..u</sub>)'':
-* For ''j = 2..u'': if ''pk<sub>j</sub> &ne; pk<sub>1</sub>'', return ''pk<sub>j</sub>''.
-* Return ''0x00..00'' (33 zero bytes). This sentinel is not a valid compressed secp256k1 public key and is used only internally to indicate that all keys in the list are equal.
-
-In every invocation of ''KeyAggCoeff'', the second distinct key in the input list is assigned coefficient 1 as specified by the MuSig2 optimization in BIP327.
-
-====KeyAgg====
-
-''KeyAgg'' aggregates a sorted list of plain public keys into a single aggregate key.
-
-Algorithm ''KeyAgg(pk<sub>1..u</sub>)'':
-* Inputs:
-** The list of plain public keys ''pk<sub>1..u</sub>'': ''u'' 33-byte arrays. The public keys MUST be sorted lexicographically by their 33-byte compressed encoding.
-* Let ''Q = &infin;''.
-* For ''i = 1..u'':
-** Let ''P<sub>i</sub> = cpoint(pk<sub>i</sub>)''; fail with ''InvalidContribution'' if ''pk<sub>i</sub>'' is not a valid compressed point.
-** Let ''a<sub>i</sub> = KeyAggCoeff(pk<sub>1..u</sub>, pk<sub>i</sub>)''.
-** Let ''Q = Q + a<sub>i</sub>·P<sub>i</sub>''.
-* Fail if ''Q = &infin;''. This event occurs with negligible probability.
-* Return ''KeyAggContext(Q, gacc=1, tacc=0)''.
-
-''KeyAggContext'' is a triple ''(Q, gacc, tacc)'' where:
-* ''Q'' is the aggregate secp256k1 point produced by ''KeyAgg'' or a subsequent invocation of ''ApplyTweak''.
-* ''gacc = 1'' is the accumulated parity factor, initially the identity.
-* ''tacc = 0'' is the accumulated tweak scalar modulo ''n'', initially zero.
-
-The values ''(Q, gacc, tacc)'' are updated by ''ApplyTweak'' and are used when deriving signer-specific secret-key contributions.
-
-The aggregate public key is computed as
-
-Q = Σ(i=1..u) a_i · P_i
-
-where
-
-a_i = KeyAggCoeff(pk_1..u, pk_i).
-
-The coefficient assignment prevents rogue-key attacks while preserving compatibility with the MuSig2 optimization that assigns coefficient 1 to the second distinct key in the sorted key list.
-
-====Recursive Tree Application====
-
-In NestedMuSig2, ''KeyAgg'' is applied once at every level of the signing tree, working from the leaves up to the root. At each level, the aggregate output key of that level becomes a plain input key to the ''KeyAgg'' call at the level above. 
-
-Let ''pk<sub>1,d</sub>'' denote the public key representing the subtree containing signer ''1'' at depth ''d''. At the leaf level (depth ''&Lambda;−1''), this is signer ''1' ''s individual public key. At each higher level, it is the aggregate key produced by the ''KeyAgg'' call at the level below.
-
-For a signer at depth &Lambda;−1 walking up to the root, the key aggregation procedure is:
-# '''Leaf level''': the signer computes ''pk<sub>1,&Lambda;−1</sub> = IndividualPubkey(sk<sub>1</sub>)''.
-# '''Each intermediate level (depth ''d'', from ''&Lambda;−2'' down to ''0'')''': the coordinator collects the plain public keys of its children, sorts them, runs ''KeyAgg'', and derives the subtree public key for the next higher level, ''pk<sub>1,d−1</sub> = PlainPk(cbytes(KeyAgg(L<sub>d</sub>).Q))''.
-# '''Root level (depth -1)''': the root coordinator computes ''root_ctx = KeyAgg(L<sub>0</sub>)'' and retains the resulting ''KeyAggContext'' for signing. The root aggregate public key is ''X&#771; = GetXonlyPubkey(root_ctx) = xbytes(root_ctx.Q)''. This is the BIP340 x-only public key used for on-chain signature verification.
-
-'''Serialization boundary (normative)''': at every intermediate level, ''KeyAgg'' returns a ''KeyAggContext''. Only ''cbytes(ctx.Q)'', the 33-byte compressed point, is passed to the parent level as a ''PlainPk''.
-
-Key aggregation is non-interactive: each level requires only the plain public keys of its immediate children. No signing rounds are needed. 
-
-====ApplyTweak====
-
-The root aggregate key may be tweaked after ''KeyAgg(L<sub>0</sub>)'' for BIP32 key derivation or BIP341 Taproot script commitments. In NestedMuSig2, ''ApplyTweak'' MUST only be applied to the ''root_ctx'' returned by the root-level ''KeyAgg'' invocation during the ''sign'' invocation by the leaf node.
-The tweaking logic is the same as in MuSig2.
-
-Algorithm ''ApplyTweak(keyagg_ctx, tweak, is_xonly)'':
-* Inputs:
-** ''keyagg_ctx'': a ''KeyAggContext'' triple ''(Q, gacc, tacc)''.
-** ''tweak'': a 32-byte array.
-** ''is_xonly'': a boolean.
-* Fail if ''len(tweak) ≠ 32''.
-* Let ''t = int(tweak)''; fail if ''t ≥ n''.
-* Let ''g = n−1'' if ''is_xonly'' and ''not has_even_y(Q)'', otherwise let ''g = 1''.
-* Let ''Q' = g·Q + t·G''; fail if ''Q' = ∞''.
-* Let ''gacc' = g·gacc mod n''.
-* Let ''tacc' = (t + g·tacc) mod n''.
-* Return ''KeyAggContext(Q', gacc', tacc')''.
-
-Multiple tweaks may be applied by repeatedly calling ''ApplyTweak'' on the returned ''KeyAggContext''. The accumulated ''gacc'' and ''tacc'' are used in ''Sign'' to produce a partial signature that is consistent with the tweaked root key.
-
-Plain tweaks (''is_xonly = false'') shift the key by a scalar without normalizing its parity. This mode is used for BIP32-style key derivation.
-
-X-only tweaks (''is_xonly = true'') first normalize the aggregate public key to even-y, if necessary, before applying the tweak. This mode is used for BIP341 Taproot output-key construction. See [[bip-0327.mediawiki#tweaking|BIP327 §Tweaking]] for the security rationale and correctness proofs of the tweaking procedure.
+This restriction applies only to aggregate-key tweaking within the nested aggregation tree. It does not restrict how an individual participant derives its own secret key and corresponding plain public key before entering the protocol.
 
 === Nonce Generation ===
 
