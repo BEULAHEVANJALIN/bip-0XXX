@@ -213,37 +213,61 @@ A ''secnonce'' MUST be supplied to at most one invocation of ''Sign'', including
 
 Only leaf signers invoke ''NonceGen''. An aggregation node representing a nested subgroup derives the subgroup's first-round contribution by applying ''NonceAgg'' and ''NonceAggExt'' to its participants' contributions; it MUST NOT invoke ''NonceGen'' to create a replacement nonce for the subgroup. 
 
-===Hierarchical Nonce Aggregation===
+===Nonce Aggregation===
 
-Nonce aggregation proceeds from the leaf level (depth ''&Lambda;−1'') up to the root (depth ''0'').
+The BIP327 algorithm ''NonceAgg'' is used unchanged at every aggregation node. All input requirements, failure conditions, serialization rules, and contributor-blame requirements of BIP327 ''NonceAgg'' apply.
 
-At each level, two operations are applied:
-# '''Point aggregation''' (identical to BIP327 ''NonceAgg''), the aggregate of all children's nonces at that level is computed.
-# '''Per-level binding''' (using ''NonceAggExt''), which binds the aggregate nonce to the aggregate public key at that level.
+During the first round, nonce aggregation proceeds from the leaves toward the root. A participant at an aggregation node contributes one of the following:
+* A direct leaf signer contributes the 66-byte ''pubnonce'' returned by ''NonceGen''.
+* A nested child aggregation node contributes the 66-byte external nonce returned by ''NonceAggExt''.
 
-The second operation is performed by the following internal algorithm.
+For an aggregation node at level ''d'', nonce aggregation is performed as follows:
+# The aggregator collects exactly one 66-byte first-round contribution for every participant occurrence in ''L<sub>d</sub>''. The number of contributions MUST equal the number of participant public keys in ''L<sub>d</sub>''.
+# The aggregator computes ''out<sub>d</sub> = NonceAgg(contribution<sub>1</sub>, ..., contribution<sub>u</sub>)''.
+#:The result ''out<sub>d</sub>'' is the node's '''internal aggregate nonce'''.
+# If ''d > 0'', let ''keyagg_ctx<sub>d</sub> = KeyAgg(L<sub>d</sub>)'' and ''pk<sub>d−1</sub> = GetPlainPubkey(keyagg_ctx<sub>d</sub>)''. The aggregator computes ''extnonce<sub>d</sub> = NonceAggExt(out<sub>d</sub>, pk<sub>d−1</sub>)'' and supplies ''extnonce<sub>d</sub>'' as the node's first-round contribution at level ''d−1''.
+# If ''d = 0'', ''out<sub>0</sub>'' is the root internal aggregate nonce. It MUST NOT be passed through ''NonceAggExt''. 
 
-Internal Algorithm ''NonceAggExt(aggnonce, pk_agg)'':
+At the root, the nonce binding factor is computed using the BIP327 tag and encoding ''b<sub>0</sub> = int(hash<sub>MuSig/noncecoef</sub>(out<sub>0</sub> || xbytes(Q) || m)) mod n'', where ''Q'' is the root aggregate public key after all root-level tweaks have been applied. This root computation is unchanged from BIP327.
 
+When ''&Lambda; = 1'', no invocation of ''NonceAggExt'' occurs, and nonce aggregation reduces exactly to BIP327 nonce aggregation.
+
+====Distribution of Internal Aggregate Nonces====
+
+Each aggregation node MUST retain its internal aggregate nonce ''out<sub>d</sub>'' until the signing session has completed or aborted.
+Before the second round, internal aggregate nonces are distributed from the root toward the leaves as follows:
+
+# The root aggregator begins with the nonce-path prefix ''(out<sub>0</sub>)''.
+# A non-root aggregator at level ''d'' receives the prefix ''(out<sub>0</sub>, ..., out<sub>d−1</sub>)'' from its parent.
+# It appends its stored internal aggregate nonce ''out<sub>d</sub>'' and forwards the resulting prefix ''(out<sub>0</sub>, ..., out<sub>d</sub>)'' to each of its participants.
+# A leaf signer whose path contains ''&Lambda;'' aggregation levels therefore receives ''(out<sub>0</sub>, ..., out<sub>&Lambda;−1</sub>)''.
+
+Every value in the nonce path supplied to ''Sign'' MUST be an internal aggregate nonce returned by ''NonceAgg''. An external nonce returned by ''NonceAggExt'' MUST NOT be substituted for an internal aggregate nonce in this path.
+
+Each non-root aggregation node MUST forward the same ''out<sub>d</sub>'' from which it derived the external nonce supplied to its parent.
+
+====External Nonce Aggregation====
+Algorithm ''NonceAggExt(aggnonce, pk_agg)'':
 * Inputs:
-** ''aggnonce'': a valid 66-byte aggregate nonce produced by ''NonceAgg'', or an individual signer's ''pubnonce''.
-** ''pk_agg'': the 33-byte aggregate public key for this level, encoded as ''cbytes(Q)''.
-* Let ''R'<sub>1</sub> = cpoint_ext(aggnonce[0:33])''; fail if that fails.
-* Let ''R'<sub>2</sub> = cpoint_ext(aggnonce[33:66])''; fail if that fails.
-* Let ''b = int(hashNestedMuSig/aggnoncecoef(pk_agg || aggnonce)) mod n''.
+** ''aggnonce'': the 66-byte internal aggregate nonce returned by ''NonceAgg'' for this aggregation node.
+** ''pk_agg'': the 33-byte plain aggregate public key by which this aggregation node is represented at its parent node.
+* ''Fail'' if ''len(aggnonce) &ne; 66''.
+* ''Fail'' if ''len(pk_agg) &ne; 33''.
+* Let ''Q = cpoint(pk_agg)''; ''Fail'' if that fails.
+* Let ''R'<sub>1</sub> = cpoint_ext(aggnonce[0:33])''; ''Fail'' if that fails.
+* Let ''R'<sub>2</sub> = cpoint_ext(aggnonce[33:66])''; ''Fail'' if that fails.
+* Let ''b = int(hash<sub>NestedMuSig/aggnoncecoef</sub>(aggnonce || cbytes(Q))) mod n''.
 * Let ''R<sub>1</sub> = R'<sub>1</sub>''.
-* Let ''R<sub>2</sub> = b · R'<sub>2</sub>''.
+* Let ''R<sub>2</sub> = b⋅R'<sub>2</sub>''.
 * Return ''cbytes_ext(R<sub>1</sub>) || cbytes_ext(R<sub>2</sub>)''.
 
-Note: Only the second nonce component is multiplied by the binding factor. This mirrors BIP327 ''GetSessionValues'', where the second nonce component is weighted by the nonce coefficient.
+The complete 33-byte compressed serialization ''cbytes(Q)'' MUST be included in the intermediate hash input. It MUST NOT be replaced by ''xbytes(Q)''. The points ''Q'' and ''−Q'' have the same x-coordinate but are distinct group elements and represent distinct plain public keys at the parent aggregation node. Because ''pk_agg'' is required to be a valid canonical BIP327 plain public key and ''Q = cpoint(pk_agg)'', it holds that ''cbytes(Q) = pk_agg''. Writing ''cbytes(Q)'' in the algorithm makes explicit that the full point, including its parity, is committed to by the hash.
 
-The full hierarchical nonce aggregation procedure for a coordinator at depth ''d'' is:
-# Collect ''pubnonce'' values from all children at depth ''d+1''.
-# Run ''NonceAgg'' (BIP327) on those collected ''pubnonce'' values to obtain a raw aggregate nonce.
-# Run ''NonceAggExt'' on the result using the aggregate key ''pk_agg'' for depth ''d''.
-# The result is ''out<sup>d</sup>'', the level-''d'' aggregate nonce.
+The message MUST NOT be included in ''NonceAggExt''. As specified in the paper,<ref name="paper" /> intermediate nonce binding factors are message-independent, allowing nested aggregation to be completed before the message is known. Only the root nonce binding factor commits to the message.
 
-This is repeated for ''d = &Lambda;−2, &Lambda;−3, ..., 0''.
-At depth ''&Lambda;−1'', each signer contributes its own ''pubnonce''. The first application of ''NonceAggExt'' is performed by the coordinator at depth ''&Lambda;−2'' after aggregating the leaf nonces.
+For the two-nonce instantiation, only the second nonce point is multiplied by ''b''. This follows from the paper's rule ''R<sub>j</sub> = b<sup>j−1</sup>⋅R'<sub>j</sub>''. Consequently: ''R<sub>1</sub> = R'<sub>1</sub>'', because ''b<sup>0</sup> = 1'', and ''R<sub>2</sub> = b⋅R'<sub>2</sub>'', because ''b<sup>1</sup> = b''.
 
-The root coordinator obtains ''out<sup>0</sup>'', which is the aggregate nonce used for the signing session.
+As external nonces propagate toward the root, repeated applications of ''NonceAggExt'' cause a leaf signer's second nonce point to acquire the product of the intermediate binding factors on its path. The root binding factor is applied during signing, producing the accumulated factor ''b&#780; = b<sub>0</sub>⋅b<sub>1</sub>⋅...⋅b<sub>&Lambda;−1</sub> mod n''.
+
+====Points at Infinity====
+''NonceAggExt'' MUST NOT replace a zero value of ''b'' with another value. It also MUST NOT replace a resulting point at infinity with ''G'' or any other point. If either component of the external nonce is the point at infinity, ''cbytes_ext'' encodes that component as 33 zero bytes. The parent node's unchanged BIP327 ''NonceAgg'' parses participant contributions using ''cpoint'', not ''cpoint_ext'', and therefore rejects such an external nonce and blames the nested participant that supplied it. For honestly generated nonces, this condition occurs only with negligible probability, including the negligible event ''b = 0''. A malicious participant or aggregator can deliberately cause an abort, but such a party can force the signing session to abort in any case. This intermediate behaviour is distinct from the BIP327 root behaviour. The root internal aggregate nonce ''out<sub>0</sub>'' is parsed using ''cpoint_ext'', and if the resulting final effective nonce would be the point at infinity, the BIP327 rule setting the final nonce to ''G'' applies unchanged.
