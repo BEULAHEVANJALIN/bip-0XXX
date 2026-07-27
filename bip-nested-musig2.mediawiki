@@ -271,3 +271,18 @@ As external nonces propagate toward the root, repeated applications of ''NonceAg
 
 ====Points at Infinity====
 ''NonceAggExt'' MUST NOT replace a zero value of ''b'' with another value. It also MUST NOT replace a resulting point at infinity with ''G'' or any other point. If either component of the external nonce is the point at infinity, ''cbytes_ext'' encodes that component as 33 zero bytes. The parent node's unchanged BIP327 ''NonceAgg'' parses participant contributions using ''cpoint'', not ''cpoint_ext'', and therefore rejects such an external nonce and blames the nested participant that supplied it. For honestly generated nonces, this condition occurs only with negligible probability, including the negligible event ''b = 0''. A malicious participant or aggregator can deliberately cause an abort, but such a party can force the signing session to abort in any case. This intermediate behaviour is distinct from the BIP327 root behaviour. The root internal aggregate nonce ''out<sub>0</sub>'' is parsed using ''cpoint_ext'', and if the resulting final effective nonce would be the point at infinity, the BIP327 rule setting the final nonce to ''G'' applies unchanged.
+
+===Session Context===
+
+The '''session context''' of a leaf signer is a data structure consisting of:
+* ''nonce_path'': the sequence ''(out<sub>0</sub>, ..., out<sub>&Lambda;−1</sub>)'' of 66-byte internal aggregate nonces at each level along the signer's path, ordered from the root toward the signer.
+* ''pk_tree'': the sequence ''(T<sub>0</sub>, ..., T<sub>&Lambda;−1</sub>)'' of cosigner-key multisets at each level along the signer's path, ordered from the root toward the signer. Each ''T<sub>d</sub>'' is a possibly empty multiset of 33-byte plain public keys. It excludes the participant occurrence by which the signer is represented at level ''d''. It MAY nevertheless contain one or more public keys bytewise equal to ''pk<sub>d</sub>'' if other participant occurrences at that level use the same plain public key, as duplicate public keys are permitted by BIP327.
+* ''tweak<sub>1..v</sub>'': ''v'' 32-byte tweaks applied to the root aggregate key, with ''0 &le; v < 2<sup>32</sup>''.
+* ''is_xonly_t<sub>1..v</sub>'': ''v'' booleans, one tweak-mode flag for each element of ''tweak<sub>1..v</sub>''.
+* ''m'': the message to sign, a byte array.
+
+''nonce_path'' and ''pk_tree'' MUST have the same length ''&Lambda; &ge; 1''. Every resulting per-level key list ''L<sub>d</sub>'' MUST satisfy the input-size requirements of BIP327 ''KeySort'' and ''KeyAgg''. Unlike the BIP327 session context, the per-level key lists are determined jointly by the leaf signer's plain public key and ''pk_tree''. Consequently, different leaves of the same signer tree generally have different session contexts.
+
+Although ''T<sub>d</sub>'' is treated cryptographically as a multiset, an implementation that supports contribution attribution MUST retain an unambiguous association between every key occurrence and the participant that supplied it. Sorting the public keys MUST NOT discard this association.
+
+The session context, its construction, and any cached output of ''GetSessionValues'' MUST be protected against modification by an untrusted party. In particular, a signer MUST verify that the root aggregate key, tweaks, message, per-level cosigner keys, and internal aggregate nonces correspond to the signing session it intends to authorize.
