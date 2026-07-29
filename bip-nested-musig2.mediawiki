@@ -397,3 +397,70 @@ If every required contribution verifies against session contexts derived from th
 As with BIP327, partial signatures are '''not''' proofs of knowledge or possession. A malicious party controlling more than one participant position can construct a partial signature that verifies for a public key whose secret key it does not know, but it will then be unable to produce a valid contribution for at least one of its other participant positions.<ref>''Forgery with a fake key in MuSig2'', https://gist.github.com/AdamISZ/ca974ed67889cedc738c4a1f65ff620b</ref> Consequently, successful partial-signature verification MUST NOT be interpreted as proof that the purported signer knows the corresponding secret key.
 
 The protocol purpose of partial-signature verification is to identify disruptive participants. The internal invocation performed by ''Sign'' additionally serves as an implementation correctness check, detecting local computation errors before the partial signature is released.
+
+===Partial Signature Aggregation===
+
+Second-round aggregation proceeds from the leaves toward the root of the signer tree. Intermediate aggregation combines the second-round contributions of the participants in a nested group into a partial signature representing that group at its parent aggregation level. Root aggregation combines the contributions of the root-level participants into the final BIP340 signature.
+
+====Intermediate Partial Signature Aggregation====
+
+The aggregator of a nested group at level ''d &ge; 1'' sums the second-round contributions of the group's participants. Intermediate aggregate keys are not tweaked; consequently, no tweak contribution is added during intermediate aggregation.
+
+Algorithm ''PartialSigAggIntermediate(psig<sub>1..u</sub>)'':
+* Inputs:
+** The number ''u'' of partial signatures, with ''0 < u < 2<sup>32</sup>''.
+** ''psig<sub>1..u</sub>'': one 32-byte partial signature for each participant occurrence at the aggregation node.
+* For ''i = 1, ..., u'':
+** If ''len(psig<sub>i</sub>) &ne; 32'', fail with ''InvalidContribution(i)''.
+** Let ''s<sub>i</sub> = int(psig<sub>i</sub>)''.
+** If ''s<sub>i</sub> &ge; n'', fail with ''InvalidContribution(i)''.
+* Let ''s = s<sub>1</sub> + ... + s<sub>u</sub> mod n''.
+* Return ''bytes(32, s)''.
+
+The returned value is the partial signature by which the nested group is represented at its parent level. Subject to consistent session data, it can be verified using ''PartialSigVerify'' with:
+* the nested group's external nonce as ''pubnonce'';
+* the nested group's 33-byte plain aggregate public key as ''pk''; and
+* the truncated session context covering the path from the root through the parent aggregation level.
+
+The external nonce already incorporates the intermediate binding factor belonging to the nested group. Consequently, the truncated session context contains only the nonce-binding factors of the levels above that group.
+
+Implementations that require identifiable aborts SHOULD verify each individual contributions with ''PartialSigVerify'' before invoking ''PartialSigAggIntermediate''. ''PartialSigAggIntermediate'' only validates scalar encodings; it does not establish that the supplied partial signatures satisfy their verification equations.
+
+====Root Partial Signature Aggregation====
+
+The root aggregator sums exactly one second-round contribution for each participant occurrence in ''L<sub>0</sub>''. Each contribution is either an individual leaf partial signature or an intermediate aggregate partial signature. Root aggregation uses the BIP327 nonce binding factor, challenge computation, parity correction, and tweak contribution unchanged. 
+
+The '''root aggregation session context''' consists of:
+* ''out<sub>0</sub>'': the 66-byte root internal aggregate nonce.
+* ''L<sub>0</sub>'': the ''KeySort''-sorted list of 33-byte plain public keys of the root-level participants.
+* ''tweak<sub>1..v</sub>'': the root-level tweaks.
+* ''is_xonly_t<sub>1..v</sub>'': the corresponding tweak-mode flags.
+* ''m'': the message.
+
+Algorithm ''PartialSigAgg(psig<sub>1..u</sub>, agg_session_ctx)'':
+* Inputs:
+** The number ''u'' of second-round contributions, with ''0 < u < 2<sup>32</sup>''.
+** ''psig<sub>1..u</sub>'': one 32-byte second-round contribution for each participant occurrence in ''L<sub>0</sub>''.
+** ''agg_session_ctx'': the root aggregation session context ''(out<sub>0</sub>, L<sub>0</sub>, tweak<sub>1..v</sub>, is_xonly_t<sub>1..v</sub>, m)''.
+* Fail if ''u &ne; len(L<sub>0</sub>)''.
+* Fail if ''len(out<sub>0</sub>) &ne; 66''.
+* Fail if ''len(tweak<sub>1..v</sub>) &ne; len(is_xonly_t<sub>1..v</sub>)''.
+* Let ''keyagg_ctx = KeyAgg(L<sub>0</sub>)''; fail if that fails.
+* For ''i = 1, ..., v'':
+** Let ''keyagg_ctx = ApplyTweak(keyagg_ctx, tweak<sub>i</sub>, is_xonly_t<sub>i</sub>)''; fail if that fails.
+* Let ''(Q, _, tacc) = keyagg_ctx''.
+* Let ''b<sub>0</sub> = int(hash<sub>MuSig/noncecoef</sub>(out<sub>0</sub> || xbytes(Q) || m)) mod n''.
+* Let ''R<sub>1,0</sub> = cpoint_ext(out<sub>0</sub>[0:33])''; if that fails, fail with ''InvalidContribution'', blaming the root nonce aggregator.
+* Let ''R<sub>2,0</sub> = cpoint_ext(out<sub>0</sub>[33:66])''; if that fails, fail with ''InvalidContribution'', blaming the root nonce aggregator.
+* Let ''R' = R<sub>1,0</sub> + b<sub>0</sub>⋅R<sub>2,0</sub>''.
+* If ''is_infinite(R')'', let the final nonce ''R = G''; otherwise, let ''R = R' ''.
+* Let ''c = int(hash<sub>BIP0340/challenge</sub>(xbytes(R) || xbytes(Q) || m)) mod n''.
+* For ''i = 1, ..., u'':
+** If ''len(psig<sub>i</sub>) &ne; 32'', fail with ''InvalidContribution(i)''.
+** Let ''s<sub>i</sub> = int(psig<sub>i</sub>)''.
+** If ''s<sub>i</sub> &ge; n'', fail with ''InvalidContribution(i)''.
+* Let ''g = 1'' if ''has_even_y(Q)''; otherwise, let ''g = −1 mod n''.
+* Let ''s = s<sub>1</sub> + ... + s<sub>u</sub> + c·g·tacc mod n''.
+* Return ''sig = xbytes(R) || bytes(32, s)''.
+
+The output is a valid 64-byte BIP340 signature for the x-only public key ''GetXonlyPubkey(keyagg_ctx)'' and message ''m'', provided that every required contribution was generated using the same root aggregation session context.
