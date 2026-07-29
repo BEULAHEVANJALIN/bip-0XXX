@@ -332,3 +332,34 @@ Internal Algorithm ''GetSessionValues(session_ctx, pk)'':
 For ''&Lambda; = 1'', no intermediate binding factor is computed. For a given sorted root key list, tweaks, aggregate nonce, and message, the values ''Q'', ''gacc'', ''tacc'', ''b<sub>0</sub>'', ''R'', and ''c'' are exactly the corresponding BIP327 session values. In this case, ''b&#780; = b<sub>0</sub>'' and ''&#269; = c·a<sub>0</sub>''.
 
 The ordinary challenge ''c'' and the accumulated challenge coefficient ''&#269;'' are both returned. The distinction is necessary because leaf signing and partial-signature verification use ''&#269;'', while final root-level tweak aggregation uses the ordinary challenge ''c'', exactly as BIP327 uses its challenge when adding the ''tacc'' contribution.
+
+The algorithm ''Sign(secnonce, sk, session_ctx)'' is identical to the BIP327 ''Sign'' algorithm except that the per-session values are obtained from ''GetSessionValues'' as specified in this document.
+
+Algorithm ''Sign(secnonce, sk, session_ctx)'':
+* Inputs:
+** ''secnonce'': a 97-byte secret nonce, as returned by ''NonceGen'', that has never previously been used as input to ''Sign''.
+** ''sk'': the signer's 32-byte secret key.
+** ''session_ctx'': the signer's session context.
+* ''Fail'' if ''len(secnonce) &ne; 97'' or ''len(sk) &ne; 32''.
+* Let ''pk = IndividualPubkey(sk)''; fail if that fails.
+* Let ''(Q, gacc, _, b&#780;, R, _, &#269;) = GetSessionValues(session_ctx, pk)''; fail if that fails.
+* Let ''k'<sub>1</sub> = int(secnonce[0:32])''.
+* Let ''k'<sub>2</sub> = int(secnonce[32:64])''.
+* Let ''pk' = secnonce[64:97]'', interpreted as a compressed public key..
+* The ''secnonce'' MUST NOT be used in any subsequent invocation of ''Sign'', regardless of whether this invocation succeeds or fails. Implementations SHOULD invalidate the secret nonce as soon as ''k'<sub>1</sub>'', ''k'<sub>2</sub>'', and ''pk' '' have been copied, for example by securely erasing its first 64 bytes or by using an API that consumes the secret-nonce object.
+* ''Fail'' if ''k'<sub>i</sub> = 0'' or ''k'<sub>i</sub> &ge; n'' for ''i = 1, 2''.
+* If ''has_even_y(R)'', let ''k<sub>i</sub> = k'<sub>i</sub>'' for ''i = 1, 2''; otherwise, let ''k<sub>i</sub> = n − k'<sub>i</sub>'' for ''i = 1, 2''.
+* Let ''d' = int(sk)''; fail if ''d' = 0'' or ''d' &ge; n''.
+* Let ''P = d'⋅G''.
+* ''Fail'' if ''cbytes(P) &ne; pk' ''.
+* Let ''g = 1'' if ''has_even_y(Q)''; otherwise, let ''g = −1 mod n''.
+* Let ''d = g·gacc·d' mod n''.
+* Let ''s = (k<sub>1</sub> + b&#780;·k<sub>2</sub> + &#269;·d) mod n''.
+* Let ''psig = bytes(32, s)''.
+* Let ''pubnonce = cbytes(k'<sub>1</sub>⋅G) || cbytes(k'<sub>2</sub>⋅G)''.
+* If ''PartialSigVerifyInternal(psig, pubnonce, pk, session_ctx)'' returns failure, fail.
+* Return the partial signature ''psig''.
+
+As in BIP327, the signer's second-round output consists solely of ''psig''. The effective root aggregate nonce ''R'' is public and is recomputed from the session context by verifiers and by the root aggregator. 
+
+The final self-verification step detects implementation errors and malformed internal state before a partial signature is released. Implementations SHOULD verify their own output by invoking ''PartialSigVerify'' prior to releasing a partial signature.
