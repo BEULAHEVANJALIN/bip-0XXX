@@ -363,3 +363,37 @@ Algorithm ''Sign(secnonce, sk, session_ctx)'':
 As in BIP327, the signer's second-round output consists solely of ''psig''. The effective root aggregate nonce ''R'' is public and is recomputed from the session context by verifiers and by the root aggregator. 
 
 The final self-verification step detects implementation errors and malformed internal state before a partial signature is released. Implementations SHOULD verify their own output by invoking ''PartialSigVerify'' prior to releasing a partial signature.
+
+Implementations SHOULD run ''PartialSigVerify'' on their own output as a correctness self-check.
+
+===Partial Signature Verification===
+
+''PartialSigVerify'' verifies the second-round contribution of a signing participant. A participant is either an individual leaf signer or a nested aggregation node treated as a participant at its parent level. For an individual leaf signer, ''pubnonce'' is the 66-byte public nonce returned by ''NonceGen'', and ''session_ctx'' is the leaf signer's complete session context. For a nested aggregation node, ''pubnonce'' is the node's external nonce, ''pk'' is the node's plain aggregate public key, and ''session_ctx'' is the truncated session context covering the path from the root through the parent level at which that node participates. In that context, the final cosigner multiset excludes the participant occurrence represented by ''pk''.
+
+Algorithm ''PartialSigVerify(psig, pubnonce, pk, session_ctx)'':
+* Inputs:
+** ''psig'': a 32-byte partial signature.
+** ''pubnonce'': the participant's 66-byte public nonce. For a nested aggregation node, this is its external nonce.
+** ''pk'': the participant's 33-byte plain public key.
+** ''session_ctx'': the session context corresponding to the participant and its position in the signer tree.
+* Return failure if ''len(psig) &ne; 32''.
+* Return failure if ''len(pubnonce) &ne; 66''.
+* Return failure if ''len(pk) &ne; 33''.
+* Let ''(Q, gacc, _, b&#780;, R, _, &#269;) = GetSessionValues(session_ctx, pk)''; fail if that fails.
+* Let ''s = int(psig)''; return failure if ''s &ge; n''.
+* Let ''R<sub>*,1</sub> = cpoint(pubnonce[0:33])''; return failure if that fails.
+* Let ''R<sub>*,2</sub> = cpoint(pubnonce[33:66])''; return failure if that fails.
+* Let ''R&#780;' = R<sub>*,1</sub> + b&#780;⋅R<sub>*,2</sub>''.
+* If ''has_even_y(R)'', let ''R&#780; = R&#780;' ''; otherwise, let ''R&#780; = −R&#780;' ''.
+* Let ''P = cpoint(pk)''; return failure if that fails.
+* Let ''g = 1'' if ''has_even_y(Q)''; otherwise, let ''g = −1 mod n''.
+* Let ''g' = g·gacc mod n''.
+* Return success if and only if ''s⋅G = R&#780; + (&#269;·g' mod n)⋅P''.
+
+The verification equation follows directly from the signing equation. An honest participant computes ''s = k<sub>1</sub> + b&#780;·k<sub>2</sub> + &#269;·g·gacc·d' mod n'', and therefore ''s⋅G = R&#780; + &#269;·g·gacc·P''.
+
+If every required contribution verifies against session contexts derived from the same signer tree, root aggregate key, tweak sequence, root aggregate nonce, and message, and every aggregator performs the specified modular aggregation, the final signature produced by ''PartialSigAgg'' passes BIP340 verification. Verification of contributions against mutually inconsistent session contexts does not provide this guarantee.
+
+As with BIP327, partial signatures are '''not''' proofs of knowledge or possession. A malicious party controlling more than one participant position can construct a partial signature that verifies for a public key whose secret key it does not know, but it will then be unable to produce a valid contribution for at least one of its other participant positions.<ref>''Forgery with a fake key in MuSig2'', https://gist.github.com/AdamISZ/ca974ed67889cedc738c4a1f65ff620b</ref> Consequently, successful partial-signature verification MUST NOT be interpreted as proof that the purported signer knows the corresponding secret key.
+
+The protocol purpose of partial-signature verification is to identify disruptive participants. The internal invocation performed by ''Sign'' additionally serves as an implementation correctness check, detecting local computation errors before the partial signature is released.
