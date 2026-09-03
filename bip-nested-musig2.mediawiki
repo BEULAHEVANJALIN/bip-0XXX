@@ -204,16 +204,13 @@ Algorithm ''NonceAggExt(aggnonce, pk_agg)'':
 ** ''pk_agg'': the 33-byte BIP327 plain aggregate public key by which that node is represented at its parent.
 * ''Fail'' if ''len(aggnonce) ≠ 66''.
 * ''Fail'' if ''len(pk_agg) ≠ 33''.
-* Let ''Q = cpoint(pk_agg)''; ''Fail'' if that fails.
 * Let ''R'<sub>1</sub> = cpoint_ext(aggnonce[0:33])''; ''Fail'' if that fails.
 * Let ''R'<sub>2</sub> = cpoint_ext(aggnonce[33:66])''; ''Fail'' if that fails.
-* Let ''b = int(hash<sub>NestedMuSig/aggnoncecoef</sub>(pk_agg || aggnonce)) mod n''.
+* Let ''b = int(hash<sub>NestedMuSig/aggnoncecoef</sub>(aggnonce || xbytes(pk_agg))) mod n''.
 * Let ''R<sub>1</sub> = R'<sub>1</sub>''.
 * Let ''R<sub>2</sub> = b⋅R'<sub>2</sub>''.
 * ''Fail'' if ''R<sub>1</sub>'' or ''R<sub>2</sub>'' is the point at infinity.
 * Return ''cbytes(R<sub>1</sub>) || cbytes(R<sub>2</sub>)''.
-
-The 33-byte value ''pk_agg'' is included in its entirety in the intermediate nonce-binding hash. It MUST NOT be replaced by its 32-byte X-only representation. Because ''pk_agg'' is a BIP327 plain public key, it identifies the complete secp256k1 point, including its Y-coordinate parity. Replacing it with an X-only encoding would identify ''Q'' and ''−Q'', even though they are distinct group elements and distinct participant plain public keys. The input order of the intermediate tagged hash is ''pk_agg || aggnonce''. This concretely instantiates the paper's intermediate random-oracle input: the subgroup aggregate public key followed by that subgroup's internal nonce vector. Both fields have fixed lengths, 33 bytes and 66 bytes respectively. The message MUST NOT be included in ''NonceAggExt''. Intermediate nonce-binding factors are message-independent. Only the root factor ''b<sub>0</sub>'' commits to the message.
 
 For the BIP327 two-nonce instantiation, only the second internal aggregate nonce point is multiplied by ''b''. This is the specialization of the NestedMuSig2 rule ''R<sub>j</sub> = b<sup>j−1</sup>⋅R'<sub>j</sub>''. Therefore, ''R<sub>1</sub> = R'<sub>1</sub>'' and ''R<sub>2</sub> = b⋅R'<sub>2</sub>''. As external nonces propagate toward the root, repeated invocations of ''NonceAggExt'' multiply the contribution of a leaf's second nonce point by the intermediate binding factors on that leaf's path. The root binding factor is applied during root nonce processing, giving the accumulated coefficient ''b̌ = b<sub>0</sub>·b<sub>1</sub>·...·b<sub>Λ−1</sub> mod n''.
 
@@ -427,14 +424,6 @@ The intent is to introduce only the operations required for recursive compositio
 
 BIP327 ''KeyAgg'' is order-dependent and provides ''KeySort'' for applications that require order-independent aggregation. This specification invokes ''KeySort'' independently at every aggregation node. This provides one canonical BIP327 participant-key ordering for each multiset of participant occurrences and avoids requiring every application to define an additional ordering convention for nested groups. Sorting is local to an aggregation node. An internal node first aggregates using its own sorted participant list, and the resulting aggregate plain public key then appears as one participant key in its parent's sorted list. Duplicate public-key occurrences remain distinct occurrences during this process.
 
-===Plain Public Keys Between Aggregation Levels===
-
-Intermediate aggregate keys are represented using the 33-byte BIP327 plain public-key encoding rather than the 32-byte BIP340 X-only encoding. The recursive construction requires the actual aggregate group element of an internal node to become a participant group element at its parent. For a point ''Q'', the X-only encodings of ''Q'' and ''−Q'' are identical, while their plain compressed encodings are distinct. Replacing an intermediate aggregate point by an X-only representation would therefore lose information required to identify the group element that was produced by the child aggregation. Accordingly, ''GetPlainPubkey(keyagg_ctx)'' is used between aggregation levels, while ''GetXonlyPubkey(keyagg_ctx)'' is used only for the final root public key exposed to BIP340 verification.
-
-===Leaf Nonce Generation===
-
-NestedMuSig2 does not introduce a new leaf nonce-generation algorithm. Leaf signers use BIP327 ''NonceGen'' unchanged, including the <code>MuSig/aux</code> and <code>MuSig/nonce</code> tagged hashes. The nesting-specific operation begins after leaf public nonces have been created. Internal nodes aggregate participant nonces and apply the additional intermediate binding operation defined by ''NonceAggExt''. Keeping leaf nonce generation unchanged also preserves the BIP327 defense-in-depth inputs and nonce-reuse protections and avoids introducing a second nonce-generation construction whose security properties would require separate analysis. This specification does not generalize BIP327 ''CounterNonceGen'' or ''DeterministicSign''. Their applicability to nested signing sessions is outside this BIP's scope.
-
 ===Separate Intermediate and Root Nonce Binding===
 
 The Nested MuSig2 construction distinguishes intermediate nonce binding from root nonce binding. Intermediate aggregation uses a message-independent binding factor, while the root binding factor additionally commits to the message.
@@ -444,10 +433,6 @@ This specification instantiates these roles with separate tagged hashes:
 * <code>MuSig/noncecoef</code> for root binding.
 
 The tags MUST remain distinct. Using a separate intermediate tag separates the two random-oracle roles. Retaining the existing <code>MuSig/noncecoef</code> calculation at the root preserves the BIP327 root computation in the flat ''Λ = 1'' case. Using <code>MuSig/noncecoef</code> at every aggregation level was considered and rejected because the intermediate and root computations serve different roles and have different inputs: intermediate binding is independent of the message, whereas root binding commits to it.
-
-===Intermediate Nonce-Binding Encoding===
-
-For a non-root aggregation node represented by the 33-byte aggregate plain public key ''pk_agg'' and 66-byte internal aggregate nonce ''aggnonce'', the intermediate binding factor is computed from ''pk_agg || aggnonce''. The complete 33-byte plain public key is used rather than its X-only representation for the same reason that intermediate key aggregation uses plain public keys: the points ''Q'' and ''−Q'' are distinct participant group elements and MUST remain distinguishable. Both fields have fixed lengths, so this concatenation is unambiguous. The aggregate public key precedes the nonce vector to follow the argument structure of the intermediate nonce-binding function in the Nested MuSig2 construction.
 
 ===Message-Independent Intermediate Aggregation===
 
@@ -500,14 +485,6 @@ By the time contributions reach the root, every nested subtree is represented in
 
 No NestedMuSig2-specific object is exposed to the final BIP340 verifier.
 
-===Points at Infinity===
-
-BIP327 distinguishes participant public nonces from aggregate nonces. Aggregate nonce components may represent the point at infinity using ''cbytes_ext'', while participant nonce components are ordinary compressed points. An internal NestedMuSig2 aggregate nonce therefore permits the same point-at-infinity representation as a BIP327 aggregate nonce. An external nonce, however, is subsequently consumed by the parent's unchanged BIP327 ''NonceAgg'' as a participant nonce. A successful ''NonceAggExt'' output consequently requires both resulting nonce points to be finite. This specification aborts a non-root ''NonceAggExt'' invocation when a resulting external component is the point at infinity rather than replacing it with another point. In particular, a hash output of zero is not remapped to another scalar. At the root, the ordinary BIP327 behavior remains unchanged: if the final effective aggregate nonce is the point at infinity, the effective nonce is set to ''G'' according to BIP327.
-
-===Relation to the Nested MuSig2 Security Result===
-
-The referenced paper proves security properties for the NestedMuSig2 construction in an abstract cryptographic model. This specification is a concrete secp256k1 and BIP327 instantiation of that construction and also makes interoperability choices concerning serialization, key sorting, tagged-hash domains, BIP327-optimized key aggregation, root aggregate-key tweaking, and exceptional point handling. The paper's security result motivates the specification's recursive structure, but this BIP does not claim that every Bitcoin-specific extension or encoding choice introduced here follows automatically from the paper's proof. Implementations and reviewers SHOULD evaluate the concrete instantiation, and in particular the root-tweaking extension and domain separation choices, independently in addition to considering the security analysis of the referenced construction.
-
 ==Backward Compatibility==
 
 NestedMuSig2 does not introduce a new Bitcoin signature type, public-key encoding, transaction witness format, or consensus validation rule. The final output of a successful NestedMuSig2 signing session is an ordinary 64-byte BIP340 Schnorr signature under an ordinary 32-byte BIP340 X-only public key. A BIP340 verifier does not receive, and does not need to know, the nested signer tree, intermediate aggregate keys, internal aggregate nonces, external nonces, or partial signatures. Consequently, software that only verifies the completed BIP340 signature does not require NestedMuSig2 support.
@@ -524,23 +501,6 @@ In particular, when the root aggregate key is used as a Taproot output key, the 
 except to the extent that such information is revealed through other application or transaction metadata.
 
 This specification does not modify BIP341 Taproot validation rules.
-
-===BIP327 Compatibility===
-
-NestedMuSig2 reuses BIP327 algorithms and wire-level participant objects where possible, but it is not itself an unmodified BIP327 signing session when the signer tree contains more than one aggregation level.
-
-For ''Λ = 1'', no intermediate ''NonceAggExt'' operation or intermediate nonce-binding factor exists. For the same sorted participant-key list, aggregate-key tweaks, aggregate nonce, and message, key aggregation, root nonce processing, partial signing, and final aggregation reduce to the corresponding BIP327 computations. For ''Λ > 1'', NestedMuSig2 introduces additional recursive operations and therefore requires NestedMuSig2-aware software within nested subgroups.
-
-At the boundary between a nested subgroup and its parent, however, the subgroup is represented by the same forms of objects expected from an ordinary BIP327 participant:
-* a 33-byte plain public key;
-* a 66-byte participant public nonce; and
-* a 32-byte partial signature.
-
-As a consequence, a NestedMuSig2 subgroup can participate as one participant at a root aggregation node, with the remaining participants following ordinary BIP327 behavior, provided the application coordinating the nested participant supplies the aggregate public key, external nonce, and aggregate partial signature defined by this specification. The other root-level participants do not need to know the internal structure of that nested subgroup. This protocol-level compatibility does not imply that an existing BIP327 software API can represent or coordinate nested signing without modification. Applications that construct Session Contexts, attribute contributions, manage nested first- and second-round communication, or generate intermediate aggregate contributions require NestedMuSig2-specific logic.
-
-===Aggregate-Key Tweaking===
-
-This specification preserves the BIP327 aggregate-key tweaking mechanism at the root aggregation node. Applications that already use BIP327-compatible root plain or X-only tweaks can therefore apply the same ordered tweak sequence to the NestedMuSig2 root KeyAgg Context. This specification does not support intermediate aggregate-key tweaking. Existing applications that require a tweak to an intermediate MuSig2 aggregate key cannot directly represent that construction as a NestedMuSig2 subtree without an additional protocol extension. This restriction does not prevent deriving or otherwise transforming individual leaf public keys before supplying them as participant keys.
 
 ===Output Script Descriptors===
 
@@ -567,243 +527,6 @@ Like BIP327, NestedMuSig2 produces BIP340 Schnorr signatures and does not produc
 ===Version and Protocol Negotiation===
 
 The internal NestedMuSig2 signing protocol is not interchangeable with an ordinary BIP327 session of the same participant keys when ''Λ > 1''. In particular, the intermediate tagged hash <code>NestedMuSig/aggnoncecoef</code>, external nonce transformation, path-dependent coefficients, and intermediate partial-signature aggregation are specific to this specification. Applications that exchange NestedMuSig2 protocol messages SHOULD therefore have an unambiguous way to determine that all parties responsible for nested processing are using the same version of this specification. This BIP does not mandate a particular transport-level negotiation mechanism.
-
-==Test Vectors==
-
-This specification includes machine-readable JSON test vectors and a reference implementation.
-
-Algorithms inherited unchanged from BIP327 SHOULD be tested using the corresponding BIP327 test vectors. In particular, this specification does not duplicate the BIP327 vectors for:
-* ''IndividualPubkey'';
-* ''KeySort'';
-* ''KeyAgg'' and ''KeyAggCoeff'';
-* ''ApplyTweak'';
-* ''NonceGen'';
-* ''NonceAgg''; and
-* root ''PartialSigAgg'' when invoked with an ordinary BIP327 root Session
-  Context.
-
-NestedMuSig2-specific test vectors cover the recursive operations and the composition of those BIP327 algorithms. All byte arrays in the JSON vectors are encoded as lowercase hexadecimal strings unless otherwise stated. Scalars are represented using their 32-byte big-endian encoding. Plain public keys use the 33-byte BIP327 compressed encoding, X-only public keys use the 32-byte BIP340 encoding, participant public nonces use two 33-byte compressed points, and internal aggregate nonces use two ''cbytes_ext'' encodings. The vector set SHOULD include both successful and failing cases.
-
-===Flat BIP327 Compatibility Vectors===
-
-At least one vector MUST use a signing tree with ''Λ = 1''. For that vector, the same participant keys, secret nonces, public nonces, aggregate-key tweaks, message, and sorted participant-key list MUST also be evaluated using the corresponding BIP327 algorithms.
-
-The vector MUST demonstrate equality of at least:
-* the sorted root participant-key list;
-* the root aggregate plain and X-only public keys;
-* ''gacc'' and ''tacc'';
-* the aggregate nonce ''out<sub>0</sub>'';
-* the root nonce coefficient ''b<sub>0</sub>'';
-* the effective nonce ''R'';
-* the BIP340 challenge ''c'';
-* each leaf partial signature; and
-* the final 64-byte BIP340 signature.
-
-For this case, ''b̌ = b<sub>0</sub>'' and ''č = c·a<sub>0</sub>''. These vectors ensure that introducing NestedMuSig2 does not change the specified flat BIP327 computation.
-
-===Nested Key Aggregation Vectors===
-
-Nested key-aggregation vectors MUST include trees deeper than one level.
-
-For each aggregation node, vectors SHOULD provide:
-* the unordered participant plain public keys supplied by the test case;
-* the expected ''KeySort'' output;
-* the BIP327 key-aggregation coefficient of every participant occurrence;
-* the resulting 33-byte aggregate plain public key; and
-* where applicable, the aggregate public key used as a participant key at the parent node.
-
-The vectors MUST include at least:
-* a two-level nested tree;
-* a tree with at least three aggregation levels;
-* an unbalanced tree whose leaves have different values of ''Λ'';
-* a node containing duplicate participant public-key occurrences; and
-* an intermediate aggregate public key having odd Y parity.
-
-The odd-Y case MUST demonstrate that the full 33-byte plain aggregate public key, rather than its 32-byte X-only representation, is used as the participant key at the parent level.
-
-===NonceAggExt Vectors===
-
-Standalone vectors for ''NonceAggExt(aggnonce, pk_agg)'' MUST provide:
-* ''aggnonce'';
-* ''pk_agg'';
-* the serialized tagged-hash input ''pk_agg || aggnonce'';
-* the resulting intermediate binding scalar ''b''; and
-* the expected 66-byte external nonce.
-
-Successful vectors SHOULD include aggregate keys of both Y parities. At least one vector MUST demonstrate that changing only the Y parity of ''pk_agg'' changes the tagged-hash input even though the corresponding X-only public key is unchanged.
-
-Failure vectors MUST include:
-* an ''aggnonce'' of incorrect length;
-* a ''pk_agg'' of incorrect length;
-* an invalid plain public-key encoding;
-* an invalid aggregate-nonce component encoding;
-* an internal aggregate nonce whose first component is the point at infinity; and
-* an internal aggregate nonce whose transformed second component is the point at infinity, where such a case is constructible without requiring a preimage search against the tagged hash.
-
-Implementations MUST NOT alter a test vector by replacing an infinite result or a zero binding scalar with another value.
-
-===Recursive Session-Value Vectors===
-
-Vectors for ''GetSessionValues'' MUST expose the intermediate computations, not just the final result.
-
-For each tested leaf, vectors SHOULD provide:
-* the leaf public key;
-* ''nonce_path'';
-* ''cosigner_key_path'';
-* the root tweak sequence and tweak modes;
-* the message;
-* every reconstructed ''pk<sub>d</sub>'';
-* every sorted ''L<sub>d</sub>'';
-* every key-aggregation coefficient ''a<sub>d</sub>'';
-* every intermediate binding factor ''b<sub>d</sub>'' for ''d > 0'';
-* the root binding factor ''b<sub>0</sub>'';
-* the final root point ''Q'';
-* ''gacc'';
-* ''tacc'';
-* the effective nonce ''R'';
-* the ordinary challenge ''c'';
-* the accumulated binding factor ''b̌''; and
-* the accumulated challenge coefficient ''č''.
-
-Intermediate values matter because a vector containing only a final signature may fail to distinguish errors in key-path reconstruction, nonce-domain separation, coefficient ordering, or parity handling. Vectors MUST include at least one leaf at depth greater than two.
-
-===Signing and Partial-Signature Verification Vectors===
-
-Signing vectors MUST provide fixed secret nonce values. Randomness MUST NOT be drawn while evaluating a deterministic test vector.
-
-For each leaf signing case, vectors SHOULD provide:
-* the secret key;
-* the 97-byte reference secret-nonce representation;
-* the corresponding public nonce;
-* the complete Session Context;
-* the expected ''b̌'';
-* the expected ''č'';
-* the expected 32-byte partial signature; and
-* whether ''PartialSigVerify'' is expected to succeed.
-
-Successful cases MUST include:
-* an untweaked nested signing tree;
-* a root plain-tweak case;
-* a root X-only-tweak case;
-* a sequence containing more than one root tweak;
-* a final effective nonce with even Y;
-* a final effective nonce with odd Y, exercising nonce negation; and
-* a final root key with odd Y, exercising the BIP327 key parity adjustment.
-
-The completed signatures for all successful end-to-end vectors MUST pass ordinary BIP340 verification.
-
-Negative partial-signature verification vectors SHOULD include modification of exactly one of the following while holding the remaining data fixed:
-* the partial signature;
-* the participant public nonce;
-* the participant plain public key;
-* the message;
-* a root tweak;
-* a root tweak mode;
-* an entry of ''cosigner_key_path'';
-* an entry of ''nonce_path''; and
-* the nesting position at which the Session Context is truncated.
-
-These cases SHOULD fail partial-signature verification.
-
-At least one test MUST confirm that an external nonce cannot be substituted for the corresponding internal aggregate nonce in ''nonce_path''.
-
-===Intermediate Aggregation Vectors===
-
-Vectors for ''PartialSigAggIntermediate'' MUST include a nested subgroup containing at least two participants.
-
-For each such subgroup, the vector SHOULD provide:
-* each participant's public key;
-* each participant's nonce contribution;
-* each participant's partial signature;
-* the subgroup internal aggregate nonce;
-* the subgroup aggregate plain public key;
-* the subgroup external nonce;
-* the scalar sum returned by ''PartialSigAggIntermediate''; and
-* the Session Context truncated at the subgroup's parent.
-
-The vector MUST demonstrate that ''PartialSigVerify'' accepts the resulting subgroup contribution when called with:
-* the subgroup aggregate plain public key;
-* the subgroup external nonce;
-* the aggregate partial signature; and
-* the correctly truncated Session Context.
-
-At least one vector SHOULD recursively aggregate a subgroup that itself contains another nested subgroup. This verifies the inductive property that an entire nested signing group can be represented at its parent using the same public-key, public-nonce, and partial-signature interfaces as one participant.
-
-===Root Aggregation Vectors===
-
-End-to-end vectors MUST contain enough information to construct the ordinary BIP327 root Session Context and invoke BIP327 ''PartialSigAgg'' unchanged.
-
-For each vector, provide:
-* the sorted root participant-key list;
-* the root participant nonce contributions;
-* ''out<sub>0</sub>'';
-* each root-level second-round contribution;
-* the root tweak sequence;
-* root tweak modes;
-* the message;
-* the final X-only aggregate public key; and
-* the expected 64-byte signature.
-
-At least one root participant MUST be represented by a NestedMuSig2 subgroup in every nested end-to-end vector. The expected final signature MUST pass ordinary BIP340 verification.
-
-At least one vector MUST combine:
-* a direct root-level leaf signer; and
-* a nested subgroup
-
-within the same root BIP327 session.
-
-This demonstrates that a nested subgroup can occupy one participant position alongside ordinary BIP327-style participants.
-
-===Duplicate-Key Vectors===
-
-Vectors MUST exercise duplicate plain public-key occurrences. The vector representation MUST distinguish participant occurrences even when their 33-byte public-key encodings are identical.
-
-Such vectors SHOULD verify that:
-* no duplicate occurrence is removed by sorting;
-* every occurrence receives the BIP327 coefficient dictated by ''KeyAggCoeff'';
-* exactly one nonce and one second-round contribution are associated with each participant occurrence; and
-* contribution attribution remains occurrence-specific.
-
-===Failure and State-Consistency Vectors===
-
-Failure vectors SHOULD cover malformed or mutually inconsistent public session data, including:
-* inconsistent lengths of ''nonce_path'' and ''cosigner_key_path'';
-* malformed internal aggregate nonce encodings;
-* malformed plain public keys;
-* invalid tweak values;
-* inconsistent tweak and tweak-mode counts;
-* incorrect Session Context truncation;
-* a partial-signature scalar greater than or equal to ''n'';
-* an external nonce containing an invalid participant point; and
-* inconsistent root session state.
-
-A failure caused by one malformed participant contribution SHOULD identify the responsible participant occurrence where the specification requires blame.
-
-===Secret-Nonce Consumption Tests===
-
-Secret-nonce single-use behavior is a stateful API property and need not be represented solely as a static input/output JSON vector. The reference implementation MUST nevertheless test that, after a secret nonce has been supplied to ''Sign'', a second signing attempt using the same secret-nonce state is rejected, including when the first invocation of ''Sign'' failed after consuming the nonce. Implementations using opaque secret-nonce handles SHOULD provide an equivalent test of their consuming API semantics.
-
-===BIP340 Verification===
-
-Every successful end-to-end vector MUST include an expected final public key, message, and 64-byte signature. The signature MUST pass an implementation of ordinary BIP340 verification that does not contain NestedMuSig2-specific logic. This final check ensures the external signature verifier requires no intermediate NestedMuSig2 representation or state.
-
-==Reference Implementation==
-
-A pure Python 3 reference implementation accompanies this specification. The reference implementation is intended for specification review, test-vector generation and verification, and comparison with independent implementations. It is deliberately simple and closely follows the algorithms in this document. The reference implementation is '''not''' intended for production use. In particular, it is not constant-time, does not attempt hardened secret-memory handling, and may use Python objects and assertions in ways inappropriate for implementations handling real signing keys.
-
-===Relationship to BIP340 and BIP327 Reference Code===
-
-The implementation reuses or adapts helper code from the BIP340 and BIP327 Python reference implementations for secp256k1 point arithmetic, serialization, tagged hashing, BIP340 verification, BIP327 key aggregation, aggregate-key tweaking, nonce generation, and ordinary nonce aggregation. Functions corresponding to BIP327 algorithms declared unchanged by this specification SHOULD remain behaviorally identical to the applicable BIP327 algorithms. NestedMuSig2-specific behavior SHOULD be isolated in clearly identified functions rather than introduced by modifying unrelated BIP327 primitives.
-
-In particular, the reference implementation defines NestedMuSig2-specific implementations of:
-* ''NonceAggExt'';
-* the nested Session Context;
-* ''GetSessionValues'';
-* ''Sign'';
-* ''PartialSigVerify''; and
-* ''PartialSigAggIntermediate''.
-
-Root final partial-signature aggregation uses the BIP327 ''PartialSigAgg'' computation rather than a separately modified NestedMuSig2 root-aggregation algorithm.
 
 ===Nonce Generation===
 
@@ -861,10 +584,6 @@ Final verification MUST receive only:
 
 It MUST NOT depend on any NestedMuSig2-specific signing state.
 
-===Excluded Algorithms===
-
-This specification does not define NestedMuSig2 forms of BIP327 ''DeterministicSign'' or ''CounterNonceGen''. The reference implementation MUST NOT present either algorithm as a supported NestedMuSig2 signing method. Experimental implementations of such algorithms, if retained for research, SHOULD be clearly separated from the BIP reference implementation and MUST NOT be used to generate normative NestedMuSig2 test vectors.
-
 ===Testing===
 
 Running the reference implementation's test suite MUST execute all NestedMuSig2 test-vector suites defined by this specification. Tests that are temporarily disabled during development MUST NOT remain disabled in the version published with the BIP.
@@ -873,8 +592,7 @@ The test suite MUST include checks that:
 * unchanged BIP327 primitives continue to satisfy their BIP327 vectors;
 * NestedMuSig2-specific vectors produce the expected intermediate values;
 * partial signatures verify at both leaf and nested-subgroup boundaries;
-* intermediate aggregate contributions verify using truncated Session
-  Contexts;
+* intermediate aggregate contributions verify using truncated Session Contexts;
 * secret nonces cannot be reused;
 * root aggregation produces the expected signature; and
 * every successful final signature passes ordinary BIP340 verification.
@@ -1022,7 +740,7 @@ Implementations supporting root tweaks SHOULD include interoperability tests cov
 
 ===Point-at-Infinity Handling===
 
-Exceptional-point behavior MUST be implemented exactly as specified. Internal aggregate nonce components may be the point at infinity and are encoded using BIP327 ''cbytes_ext''. External nonce components, however, are consumed by the parent's BIP327 ''NonceAgg'' as participant nonce points and MUST therefore be finite.
+Exceptional-point behavior MUST be implemented exactly as specified. Internal aggregate nonce components may be the point at infinity and are encoded using BIP327 ''cbytes_ext''. External nonce components, however, are consumed by the parent's BIP327 ''NonceAgg'' as participant nonce points and MUST therefore must not be infinite or ''G''.
 
 Consequently:
 * ''NonceAggExt'' MUST fail if an external nonce component would be infinity;
