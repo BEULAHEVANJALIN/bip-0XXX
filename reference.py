@@ -261,11 +261,11 @@ def nonce_hash(rand: bytes, pk: PlainPk, aggpk: XonlyPk, i: int, msg_prefixed: b
     buf += len(extra_in).to_bytes(4, 'big')
     buf += extra_in
     buf += i.to_bytes(1, 'big')
-    return int_from_bytes(tagged_hash('NestedMuSig/nonce', buf))
+    return int_from_bytes(tagged_hash('MuSig/nonce', buf))
 
 def nonce_gen_internal(rand_: bytes, sk: Optional[bytes], pk: PlainPk, aggpk: Optional[XonlyPk], msg: Optional[bytes], extra_in: Optional[bytes]) -> Tuple[bytearray, bytes]:
     if sk is not None:
-        rand = bytes_xor(sk, tagged_hash('NestedMuSig/aux', rand_))
+        rand = bytes_xor(sk, tagged_hash('MuSig/aux', rand_))
     else:
         rand = rand_
     if aggpk is None:
@@ -324,7 +324,7 @@ def nonce_agg_ext(nonce_internal: bytes, pk_internal: Point) -> bytes:
     except ValueError:
         # Nonce aggregator sent invalid nonces
         raise InvalidContributionError(None, "aggnonce")
-    b = nonce_coeff_hash(nonce_internal, pk_internal, b'')
+    b = agg_nonce_coeff_hash(nonce_internal, pk_internal)
     R_1 = R_1_
     R_2 = point_mul(R_2_, b)
     return cbytes_ext(R_1) + cbytes_ext(R_2) 
@@ -344,20 +344,8 @@ def apply_tweaks(keyagg_ctx: KeyAggContext, tweaks: List[bytes], is_xonly: List[
         keyagg_ctx = apply_tweak(keyagg_ctx, tweaks[i], is_xonly[i])
     return keyagg_ctx
 
-def nonce_coeff_hash(aggnonce: bytes, aggkey: Point, msg: bytes) -> int:
-    return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', aggnonce + xbytes(aggkey) + msg)) % n
-
-    # aggkey_bytes = bytes(aggkey)
-    # buf = b''
-    # buf += aggnonce
-    # buf += aggkey_bytes
-    # buf += msg
-    
-    # print('aggnonce', aggnonce.hex())
-    # print('aggkey', aggkey.hex())
-    # print('aggkey bytes', bytes(aggkey).hex())
-    # print('msg', msg.hex())
-    # return int_from_bytes(tagged_hash('NestedMuSig/noncecoef', buf)) % n
+def agg_nonce_coeff_hash(aggnonce: bytes, aggkey: Point) -> int:
+    return int_from_bytes(tagged_hash('NestedMuSig/aggnoncecoef', aggnonce + xbytes(aggkey))) % n
 
 def print_tree_path(pk_level: List[PlainPk]):
         print(f"Nodes at level: {[pk.hex().upper() for pk in pk_level]}")
@@ -372,7 +360,7 @@ def get_session_values(session_ctx: SessionContext, pk: PlainPk) -> Tuple[Point,
     b_path = []
     a_path = [a_d_1]
     for d in range(depth-2, -1, -1):
-        b_path.append(nonce_coeff_hash(nonce_path[d + 1], pk_parent, b''))
+        b_path.append(agg_nonce_coeff_hash(nonce_path[d + 1], pk_parent))
         pk_parent_bytes = PlainPk(cbytes(pk_parent))
         L_d_1 = key_sort([pk_parent_bytes] + pk_tree[d])
         a_path.append(key_agg_coeff(L_d_1, pk_parent_bytes))
@@ -384,7 +372,7 @@ def get_session_values(session_ctx: SessionContext, pk: PlainPk) -> Tuple[Point,
     assert pk_parent == root_agg_key_ctx.Q
     aggnonce = nonce_path[0]
     Q, gacc, tacc = apply_tweaks(root_agg_key_ctx, tweaks, is_xonly)
-    b = nonce_coeff_hash(aggnonce, Q, msg)
+    b = int_from_bytes(tagged_hash('MuSig/noncecoef', aggnonce + xbytes(Q) + msg)) % n
     try:
         R_1 = cpoint_ext(aggnonce[0:33])
         R_2 = cpoint_ext(aggnonce[33:66])
